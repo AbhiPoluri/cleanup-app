@@ -55,17 +55,25 @@ public sealed class AppController : IDisposable
     private readonly SelectionWatcher _watcher;
     private PopupWindow? _popup;
 
+    public static AppController? Current { get; private set; }
+
     public AppController()
     {
+        Current = this;
         _tray = new WF.NotifyIcon
         {
             Icon = MakeTrayIcon(),
             Visible = true,
-            Text = "Cleanup — Ctrl+Shift+E on selected text",
+            Text = $"Cleanup — {Settings.Current.HotkeyDisplay} on selected text",
         };
         var menu = new WF.ContextMenuStrip();
         menu.Items.Add("Test Popup", null, (_, _) => ShowPopup(Program.SampleText, IntPtr.Zero));
         menu.Items.Add("Settings…", null, (_, _) => OpenSettings());
+        menu.Items.Add("Test ✦ Button", null, (_, _) =>
+        {
+            var p = WF.Cursor.Position;
+            _watcher.ShowTestButton(p.X, p.Y);
+        });
         menu.Items.Add("Open Log", null, (_, _) =>
         {
             try { System.Diagnostics.Process.Start("notepad.exe", Log.FilePath); } catch { }
@@ -80,6 +88,12 @@ public sealed class AppController : IDisposable
 
         _hotkey = new HotkeyWindow(OnHotkey);
         _watcher = new SelectionWatcher(OnHotkey, () => _popup != null);
+    }
+
+    public void RefreshHotkey()
+    {
+        _hotkey.Reregister();
+        _tray.Text = $"Cleanup — {Settings.Current.HotkeyDisplay} on selected text";
     }
 
     private async void OnHotkey()
@@ -137,8 +151,6 @@ public sealed class AppController : IDisposable
 public sealed class HotkeyWindow : WF.NativeWindow, IDisposable
 {
     private const int WM_HOTKEY = 0x0312;
-    private const uint MOD_CONTROL = 0x0002, MOD_SHIFT = 0x0004;
-    private const uint VK_E = 0x45;
     private readonly Action _callback;
 
     [System.Runtime.InteropServices.DllImport("user32.dll")]
@@ -150,16 +162,23 @@ public sealed class HotkeyWindow : WF.NativeWindow, IDisposable
     {
         _callback = callback;
         CreateHandle(new WF.CreateParams());
-        if (RegisterHotKey(Handle, 1, MOD_CONTROL | MOD_SHIFT, VK_E))
+        Reregister();
+    }
+
+    public void Reregister()
+    {
+        UnregisterHotKey(Handle, 1);
+        var s = Settings.Current;
+        if (RegisterHotKey(Handle, 1, s.HotkeyModifiers, s.HotkeyKey))
         {
-            Log.Write("hotkey Ctrl+Shift+E registered");
+            Log.Write($"hotkey {s.HotkeyDisplay} registered");
         }
         else
         {
-            Log.Write("hotkey Ctrl+Shift+E FAILED to register — another app owns it");
+            Log.Write($"hotkey {s.HotkeyDisplay} FAILED to register — another app owns it");
             WF.MessageBox.Show(
-                "Another app already owns Ctrl+Shift+E, so the Cleanup hotkey won't work.\n" +
-                "Use the floating ✦ button or the tray menu instead (or free up the shortcut).",
+                $"Another app already owns {s.HotkeyDisplay}, so the Cleanup hotkey won't work.\n" +
+                "Pick a different hotkey in Settings, or use the floating ✦ button.",
                 "Cleanup");
         }
     }

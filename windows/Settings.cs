@@ -16,6 +16,10 @@ public class Settings
     public string DefaultTone { get; set; } = "Clean";
     public int DefaultCount { get; set; } = 3;
     public bool FloatingButton { get; set; } = true;
+    // Win32 MOD_* flags happen to match WPF ModifierKeys values (Alt=1, Ctrl=2, Shift=4, Win=8)
+    public uint HotkeyModifiers { get; set; } = 0x2 | 0x4; // Ctrl+Shift
+    public uint HotkeyKey { get; set; } = 0x45;            // E
+    public string HotkeyDisplay { get; set; } = "Ctrl+Shift+E";
 
     private static string Dir =>
         Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "Cleanup");

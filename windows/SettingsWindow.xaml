@@ -107,6 +107,16 @@
       </ComboBox>
     </Grid>
 
+    <Grid Margin="0,0,0,8">
+      <Grid.ColumnDefinitions>
+        <ColumnDefinition Width="110"/>
+        <ColumnDefinition Width="*"/>
+      </Grid.ColumnDefinitions>
+      <TextBlock Text="Hotkey" VerticalAlignment="Center"/>
+      <TextBox x:Name="HotkeyBox" Grid.Column="1" IsReadOnly="True" Cursor="Hand"
+               PreviewKeyDown="Hotkey_KeyDown" GotFocus="Hotkey_GotFocus"/>
+    </Grid>
+
     <CheckBox x:Name="FloatingButtonCheck" Margin="0,0,0,8"
               Content="Show ✦ button when I select text with the mouse"/>
 

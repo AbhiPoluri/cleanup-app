@@ -4,11 +4,16 @@ using System.Net.Http;
 using System.Text.Json;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Input;
 
 namespace Cleanup;
 
 public partial class SettingsWindow : Window
 {
+    private uint _hkMods = Settings.Current.HotkeyModifiers;
+    private uint _hkKey = Settings.Current.HotkeyKey;
+    private string _hkDisplay = Settings.Current.HotkeyDisplay;
+
     public SettingsWindow()
     {
         InitializeComponent();
@@ -25,6 +30,7 @@ public partial class SettingsWindow : Window
         SelectByContent(ToneBox, s.DefaultTone);
         SelectByContent(CountBox, s.DefaultCount.ToString());
         FloatingButtonCheck.IsChecked = s.FloatingButton;
+        HotkeyBox.Text = _hkDisplay;
         CodexStatusLabel.Text = Llm.CodexStatus();
 
         UpdatePanels();
@@ -66,6 +72,38 @@ public partial class SettingsWindow : Window
 
     private void Backend_Changed(object sender, SelectionChangedEventArgs e) => UpdatePanels();
 
+    private void Hotkey_GotFocus(object sender, RoutedEventArgs e)
+    {
+        HotkeyBox.Text = "press the new hotkey…";
+    }
+
+    private void Hotkey_KeyDown(object sender, KeyEventArgs e)
+    {
+        e.Handled = true;
+        var key = e.Key == Key.System ? e.SystemKey : e.Key;
+        // wait for a real key, not a lone modifier
+        if (key is Key.LeftCtrl or Key.RightCtrl or Key.LeftShift or Key.RightShift
+            or Key.LeftAlt or Key.RightAlt or Key.LWin or Key.RWin or Key.None)
+            return;
+        var mods = Keyboard.Modifiers;
+        if (mods == ModifierKeys.None)
+        {
+            HotkeyBox.Text = "needs a modifier (Ctrl / Alt / Shift) — try again";
+            return;
+        }
+        _hkMods = (uint)mods; // WPF ModifierKeys values match Win32 MOD_* flags
+        _hkKey = (uint)KeyInterop.VirtualKeyFromKey(key);
+        _hkDisplay = string.Join("+", new[]
+        {
+            mods.HasFlag(ModifierKeys.Control) ? "Ctrl" : null,
+            mods.HasFlag(ModifierKeys.Alt) ? "Alt" : null,
+            mods.HasFlag(ModifierKeys.Shift) ? "Shift" : null,
+            mods.HasFlag(ModifierKeys.Windows) ? "Win" : null,
+            key.ToString(),
+        }.Where(x => x != null));
+        HotkeyBox.Text = _hkDisplay;
+    }
+
     private void UpdatePanels()
     {
         if (OllamaPanel == null) return; // fires during InitializeComponent
@@ -88,7 +126,14 @@ public partial class SettingsWindow : Window
         s.DefaultTone = ((ToneBox.SelectedItem as ComboBoxItem)?.Content as string) ?? "Clean";
         s.DefaultCount = int.TryParse((CountBox.SelectedItem as ComboBoxItem)?.Content as string, out var n) ? n : 3;
         s.FloatingButton = FloatingButtonCheck.IsChecked == true;
+        if (_hkKey != 0)
+        {
+            s.HotkeyModifiers = _hkMods;
+            s.HotkeyKey = _hkKey;
+            s.HotkeyDisplay = _hkDisplay;
+        }
         s.Save();
+        AppController.Current?.RefreshHotkey();
         Close();
     }
 }

@@ -88,6 +88,7 @@ public sealed class SelectionWatcher : IDisposable
         _lastUpAt = pt;
 
         if (!dragged && !doubleClick) return;
+        Log.Write($"gesture: dragged={dragged} dbl={doubleClick} enabled={Settings.Current.FloatingButton} popupOpen={_popupOpen()} ours={IsOurWindowAt(pt)}");
         if (!Settings.Current.FloatingButton) return;
         if (_popupOpen()) return;
         if (IsOurWindowAt(pt)) return;
@@ -123,6 +124,9 @@ public sealed class SelectionWatcher : IDisposable
     }
 
     private void HideButton() => _button?.HideButton();
+
+    // tray-menu test: shows the button unconditionally to isolate hook vs window failures
+    public void ShowTestButton(int screenX, int screenY) => ShowButton(screenX, screenY);
 
     public void Dispose()
     {
