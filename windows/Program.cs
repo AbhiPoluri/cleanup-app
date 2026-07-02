@@ -97,7 +97,7 @@ public sealed class AppController : IDisposable
 
     public void ShowPopup(string text, IntPtr targetHwnd)
     {
-        _popup?.Close();
+        _popup?.SafeClose();
         _popup = new PopupWindow(text, targetHwnd);
         _popup.Closed += (_, _) => _popup = null;
         _popup.Show();

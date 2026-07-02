@@ -27,6 +27,7 @@ public partial class PopupWindow : Window
     private readonly List<Border> _chipBorders = new();
     private TextBox? _customToneBox;
     private bool _refining;
+    private bool _closing;
 
     [DllImport("user32.dll")] private static extern bool GetCursorPos(out POINT p);
     private struct POINT { public int X, Y; }
@@ -47,7 +48,8 @@ public partial class PopupWindow : Window
         RefineBox.TextChanged += (_, _) =>
             RefinePlaceholder.Visibility = RefineBox.Text.Length == 0 ? Visibility.Visible : Visibility.Collapsed;
 
-        Deactivated += (_, _) => { if (!Program.TestMode) Close(); };
+        Deactivated += (_, _) => { if (!Program.TestMode) SafeClose(); };
+        Closing += (_, _) => _closing = true;
         Closed += (_, _) => CancelAll();
         PreviewKeyDown += OnPreviewKeyDown;
         Loaded += (_, _) => PositionNearCursor();
@@ -366,9 +368,17 @@ public partial class PopupWindow : Window
 
     // ---------- actions ----------
 
+    // Close() during close (Esc → Close → Deactivated → Close again) throws in WPF
+    public void SafeClose()
+    {
+        if (_closing) return;
+        _closing = true;
+        Close();
+    }
+
     private void OnPreviewKeyDown(object sender, KeyEventArgs e)
     {
-        if (e.Key == Key.Escape) { Close(); e.Handled = true; return; }
+        if (e.Key == Key.Escape) { SafeClose(); e.Handled = true; return; }
         if ((Keyboard.Modifiers & ModifierKeys.Control) == 0) return;
         switch (e.Key)
         {
@@ -387,7 +397,7 @@ public partial class PopupWindow : Window
         var text = _selected < _results.Length ? _results[_selected] : null;
         if (text == null) { System.Media.SystemSounds.Beep.Play(); return; }
         try { Clipboard.SetText(text); } catch { }
-        Close();
+        SafeClose();
     }
 
     private async void DoReplace()
@@ -395,7 +405,7 @@ public partial class PopupWindow : Window
         var text = _selected < _results.Length ? _results[_selected] : null;
         if (text == null) { System.Media.SystemSounds.Beep.Play(); return; }
         var hwnd = _targetHwnd;
-        Close();
+        SafeClose();
         await Capture.PasteInto(hwnd, text);
     }
 }
