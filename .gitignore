@@ -6,3 +6,5 @@ mac/Cleanup.app/
 # Windows build output
 windows/bin/
 windows/obj/
+publish/
+installer/Output/
