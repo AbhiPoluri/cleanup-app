@@ -108,7 +108,9 @@ public partial class PopupWindow : Window
             var chip = new Border
             {
                 Child = label,
-                CornerRadius = new CornerRadius(99),
+                // WPF doesn't clamp oversized radii like CSS — anything over half the
+                // chip height renders as an oval, so this must stay ≈ height/2
+                CornerRadius = new CornerRadius(13),
                 BorderThickness = new Thickness(1),
                 Padding = new Thickness(12, 4, 12, 4),
                 Margin = new Thickness(0, 0, 6, 0),
@@ -137,7 +139,7 @@ public partial class PopupWindow : Window
         var custom = new Border
         {
             Child = _customToneBox,
-            CornerRadius = new CornerRadius(99),
+            CornerRadius = new CornerRadius(13),
             BorderThickness = new Thickness(1),
             BorderBrush = _t.LineStrong,
             Padding = new Thickness(10, 3, 10, 3),
