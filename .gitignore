@@ -1,0 +1,8 @@
+# macOS build output
+mac/Cleanup.app/
+*.app.bak
+.DS_Store
+
+# Windows build output
+windows/bin/
+windows/obj/
