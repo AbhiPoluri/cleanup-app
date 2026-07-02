@@ -142,6 +142,10 @@ public sealed class FloatingButtonWindow : Window
 
     [DllImport("user32.dll")] private static extern int GetWindowLong(IntPtr hWnd, int nIndex);
     [DllImport("user32.dll")] private static extern int SetWindowLong(IntPtr hWnd, int nIndex, int dwNewLong);
+    [DllImport("user32.dll")] private static extern bool SetWindowPos(IntPtr hWnd, IntPtr hWndInsertAfter, int x, int y, int cx, int cy, uint flags);
+
+    private static readonly IntPtr HWND_TOPMOST = new(-1);
+    private const uint SWP_NOSIZE = 0x0001, SWP_NOACTIVATE = 0x0010, SWP_SHOWWINDOW = 0x0040;
 
     private readonly DispatcherTimer _autoHide = new() { Interval = TimeSpan.FromSeconds(4) };
 
@@ -189,13 +193,14 @@ public sealed class FloatingButtonWindow : Window
 
     public void ShowNear(int screenX, int screenY)
     {
-        Show(); // realize the HWND so DPI is known
-        var src = PresentationSource.FromVisual(this);
-        double scale = src?.CompositionTarget?.TransformToDevice.M11 ?? 1.0;
-        double x = screenX / scale + 14, y = screenY / scale - 38;
-        var wa = SystemParameters.WorkArea;
-        Left = Math.Max(wa.Left + 4, Math.Min(x, wa.Right - Width - 4));
-        Top = Math.Max(wa.Top + 4, Math.Min(y, wa.Bottom - Height - 4));
+        if (!IsVisible) Show(); // realize the HWND
+        var h = new WindowInteropHelper(this).Handle;
+        // device pixels; flip below the cursor if too close to the screen top.
+        // A window shown without activation isn't raised — HWND_TOPMOST pins it
+        // above the foreground app (Chrome etc.) without stealing focus.
+        int x = screenX + 16, y = screenY - 46;
+        if (y < 4) y = screenY + 20;
+        SetWindowPos(h, HWND_TOPMOST, x, y, 0, 0, SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW);
         _autoHide.Stop();
         _autoHide.Start();
     }
@@ -206,12 +211,15 @@ public sealed class FloatingButtonWindow : Window
         if (IsVisible) Hide();
     }
 
+    [DllImport("user32.dll")] private static extern bool GetWindowRect(IntPtr hWnd, out RECT rect);
+    [StructLayout(LayoutKind.Sequential)]
+    private struct RECT { public int Left, Top, Right, Bottom; }
+
     public bool IsMouseOverButton(int screenX, int screenY)
     {
         if (!IsVisible) return false;
-        var src = PresentationSource.FromVisual(this);
-        double scale = src?.CompositionTarget?.TransformToDevice.M11 ?? 1.0;
-        double x = screenX / scale, y = screenY / scale;
-        return x >= Left && x <= Left + Width && y >= Top && y <= Top + Height;
+        var h = new WindowInteropHelper(this).Handle;
+        if (!GetWindowRect(h, out var r)) return false;
+        return screenX >= r.Left && screenX <= r.Right && screenY >= r.Top && screenY <= r.Bottom;
     }
 }
