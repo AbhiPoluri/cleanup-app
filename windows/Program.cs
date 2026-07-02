@@ -33,6 +33,7 @@ public sealed class AppController : IDisposable
 {
     private readonly WF.NotifyIcon _tray;
     private readonly HotkeyWindow _hotkey;
+    private readonly SelectionWatcher _watcher;
     private PopupWindow? _popup;
 
     public AppController()
@@ -55,6 +56,7 @@ public sealed class AppController : IDisposable
         _tray.ContextMenuStrip = menu;
 
         _hotkey = new HotkeyWindow(OnHotkey);
+        _watcher = new SelectionWatcher(OnHotkey, () => _popup != null);
     }
 
     private async void OnHotkey()
@@ -102,6 +104,7 @@ public sealed class AppController : IDisposable
         _tray.Visible = false;
         _tray.Dispose();
         _hotkey.Dispose();
+        _watcher.Dispose();
     }
 }
 

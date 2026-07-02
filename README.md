@@ -64,4 +64,4 @@ Type in the "tune it…" bar to refine the selected card ("shorter", "less forma
 
 - The variant slider (1–5) controls how many rewrites you get per shot; each follows a distinct brief (balanced / polished / compressed / fuller / minimal edit) so they're actually different.
 - API keys are stored in plain text (UserDefaults / settings.json). Fine for personal use; don't put shared-machine secrets in there.
-- Known gap on Windows: no floating-button-on-selection trigger yet — hotkey only.
+- Windows has a second trigger: select text with the mouse and a small ✦ button fades in near the selection — click it to open the popup. Toggle it off in Settings if it annoys you.

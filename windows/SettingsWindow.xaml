@@ -107,7 +107,10 @@
       </ComboBox>
     </Grid>
 
-    <TextBlock Text="Trigger: select text anywhere, then Ctrl+Shift+E."
+    <CheckBox x:Name="FloatingButtonCheck" Margin="0,0,0,8"
+              Content="Show ✦ button when I select text with the mouse"/>
+
+    <TextBlock Text="Trigger: select text anywhere, then Ctrl+Shift+E — or click the ✦ button."
                FontSize="11" Foreground="Gray" Margin="0,4,0,12"/>
 
     <Button x:Name="SaveBtn" Content="Save" Width="90" HorizontalAlignment="Right"

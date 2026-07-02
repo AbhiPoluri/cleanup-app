@@ -24,6 +24,7 @@ public partial class SettingsWindow : Window
         ApiModelBox.Text = s.ApiModel;
         SelectByContent(ToneBox, s.DefaultTone);
         SelectByContent(CountBox, s.DefaultCount.ToString());
+        FloatingButtonCheck.IsChecked = s.FloatingButton;
         CodexStatusLabel.Text = Llm.CodexStatus();
 
         UpdatePanels();
@@ -86,6 +87,7 @@ public partial class SettingsWindow : Window
         s.ApiModel = ApiModelBox.Text.Trim();
         s.DefaultTone = ((ToneBox.SelectedItem as ComboBoxItem)?.Content as string) ?? "Clean";
         s.DefaultCount = int.TryParse((CountBox.SelectedItem as ComboBoxItem)?.Content as string, out var n) ? n : 3;
+        s.FloatingButton = FloatingButtonCheck.IsChecked == true;
         s.Save();
         Close();
     }

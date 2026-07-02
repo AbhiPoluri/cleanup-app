@@ -15,6 +15,7 @@ public class Settings
     public string ChatgptModel { get; set; } = "gpt-5.5";
     public string DefaultTone { get; set; } = "Clean";
     public int DefaultCount { get; set; } = 3;
+    public bool FloatingButton { get; set; } = true;
 
     private static string Dir =>
         Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "Cleanup");
