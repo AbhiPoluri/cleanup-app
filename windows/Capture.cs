@@ -12,6 +12,7 @@ public static class Capture
     [DllImport("user32.dll")] private static extern IntPtr GetForegroundWindow();
     [DllImport("user32.dll")] private static extern bool SetForegroundWindow(IntPtr hWnd);
     [DllImport("user32.dll")] private static extern void keybd_event(byte bVk, byte bScan, uint dwFlags, UIntPtr dwExtraInfo);
+    [DllImport("user32.dll")] private static extern uint GetClipboardSequenceNumber();
 
     private const byte VK_SHIFT = 0x10, VK_CONTROL = 0x11, VK_MENU = 0x12, VK_C = 0x43, VK_E = 0x45, VK_V = 0x56;
     private const uint KEYEVENTF_KEYUP = 0x0002;
@@ -50,11 +51,16 @@ public static class Capture
     {
         var hwnd = GetForegroundWindow();
         var saved = TryGetText();
+        var seqBefore = GetClipboardSequenceNumber();
         SendCtrlCombo(VK_C);
         await Task.Delay(300);
+        // the sequence number bumps iff the copy actually happened — content
+        // comparison false-negatives when the clipboard already held the selection
+        bool copied = GetClipboardSequenceNumber() != seqBefore;
         var captured = TryGetText();
         TrySetText(saved); // put the user's clipboard back immediately
-        if (string.IsNullOrWhiteSpace(captured) || captured == saved)
+        Log.Write($"capture: copied={copied} len={captured?.Length ?? 0}");
+        if (!copied || string.IsNullOrWhiteSpace(captured))
             return (null, hwnd);
         return (captured, hwnd);
     }

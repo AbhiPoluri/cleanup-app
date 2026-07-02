@@ -17,10 +17,29 @@ public static class Program
     public static void Main(string[] args)
     {
         TestMode = args.Contains("--test");
+
+        using var mutex = new System.Threading.Mutex(true, "CleanupSingleInstance", out bool first);
+        if (!first)
+        {
+            WF.MessageBox.Show("Cleanup is already running — check the tray. Quit it there before starting a new one.",
+                "Cleanup");
+            return;
+        }
+
+        Log.Write($"=== Cleanup starting (test={TestMode}) ===");
+        AppDomain.CurrentDomain.UnhandledException += (_, e) =>
+            Log.Write("FATAL: " + e.ExceptionObject);
+
         var app = new System.Windows.Application
         {
             ShutdownMode = System.Windows.ShutdownMode.OnExplicitShutdown,
         };
+        app.DispatcherUnhandledException += (_, e) =>
+        {
+            Log.Write("UNHANDLED: " + e.Exception);
+            e.Handled = true;
+        };
+
         var controller = new AppController();
         if (TestMode)
             app.Dispatcher.BeginInvoke(() => controller.ShowPopup(SampleText, IntPtr.Zero));
@@ -47,6 +66,10 @@ public sealed class AppController : IDisposable
         var menu = new WF.ContextMenuStrip();
         menu.Items.Add("Test Popup", null, (_, _) => ShowPopup(Program.SampleText, IntPtr.Zero));
         menu.Items.Add("Settings…", null, (_, _) => OpenSettings());
+        menu.Items.Add("Open Log", null, (_, _) =>
+        {
+            try { System.Diagnostics.Process.Start("notepad.exe", Log.FilePath); } catch { }
+        });
         menu.Items.Add(new WF.ToolStripSeparator());
         menu.Items.Add("Quit Cleanup", null, (_, _) =>
         {
@@ -61,6 +84,7 @@ public sealed class AppController : IDisposable
 
     private async void OnHotkey()
     {
+        Log.Write("trigger fired");
         if (_popup != null) return;
         var (text, hwnd) = await Capture.GrabSelection();
         if (text == null)
@@ -78,6 +102,7 @@ public sealed class AppController : IDisposable
         _popup.Closed += (_, _) => _popup = null;
         _popup.Show();
         _popup.Activate();
+        Log.Write($"popup shown at {_popup.Left:F0},{_popup.Top:F0} ({text.Length} chars)");
     }
 
     public static void OpenSettings()
@@ -125,7 +150,18 @@ public sealed class HotkeyWindow : WF.NativeWindow, IDisposable
     {
         _callback = callback;
         CreateHandle(new WF.CreateParams());
-        RegisterHotKey(Handle, 1, MOD_CONTROL | MOD_SHIFT, VK_E);
+        if (RegisterHotKey(Handle, 1, MOD_CONTROL | MOD_SHIFT, VK_E))
+        {
+            Log.Write("hotkey Ctrl+Shift+E registered");
+        }
+        else
+        {
+            Log.Write("hotkey Ctrl+Shift+E FAILED to register — another app owns it");
+            WF.MessageBox.Show(
+                "Another app already owns Ctrl+Shift+E, so the Cleanup hotkey won't work.\n" +
+                "Use the floating ✦ button or the tray menu instead (or free up the shortcut).",
+                "Cleanup");
+        }
     }
 
     protected override void WndProc(ref WF.Message m)

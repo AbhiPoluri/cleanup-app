@@ -23,7 +23,8 @@ public sealed class SelectionWatcher : IDisposable
     [StructLayout(LayoutKind.Sequential)]
     private struct MSLLHOOKSTRUCT { public POINT pt; public uint mouseData, flags, time; public UIntPtr dwExtraInfo; }
 
-    [DllImport("user32.dll")] private static extern IntPtr SetWindowsHookEx(int idHook, HookProc lpfn, IntPtr hMod, uint dwThreadId);
+    [DllImport("user32.dll", SetLastError = true)] private static extern IntPtr SetWindowsHookEx(int idHook, HookProc lpfn, IntPtr hMod, uint dwThreadId);
+    [DllImport("kernel32.dll", CharSet = CharSet.Auto)] private static extern IntPtr GetModuleHandle(string? lpModuleName);
     [DllImport("user32.dll")] private static extern bool UnhookWindowsHookEx(IntPtr hhk);
     [DllImport("user32.dll")] private static extern IntPtr CallNextHookEx(IntPtr hhk, int nCode, IntPtr wParam, IntPtr lParam);
     [DllImport("user32.dll")] private static extern IntPtr WindowFromPoint(POINT p);
@@ -46,7 +47,10 @@ public sealed class SelectionWatcher : IDisposable
         _onClicked = onClicked;
         _popupOpen = popupOpen;
         _proc = Hook;
-        _hook = SetWindowsHookEx(WH_MOUSE_LL, _proc, IntPtr.Zero, 0);
+        _hook = SetWindowsHookEx(WH_MOUSE_LL, _proc, GetModuleHandle(null), 0);
+        Log.Write(_hook == IntPtr.Zero
+            ? $"mouse hook FAILED (err {Marshal.GetLastWin32Error()}) — floating button disabled"
+            : "mouse hook installed");
     }
 
     private IntPtr Hook(int nCode, IntPtr wParam, IntPtr lParam)
@@ -110,9 +114,11 @@ public sealed class SelectionWatcher : IDisposable
     {
         _button ??= new FloatingButtonWindow(() =>
         {
+            Log.Write("floating button clicked");
             HideButton();
             _onClicked();
         });
+        Log.Write($"floating button shown near {screenX},{screenY}");
         _button.ShowNear(screenX, screenY);
     }
 
