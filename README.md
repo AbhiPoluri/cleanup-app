@@ -37,7 +37,9 @@ bash build.sh install   # builds + installs to /Applications + registers the rig
 
 ## Windows
 
-Needs the [.NET 8 SDK](https://dotnet.microsoft.com/download/dotnet/8.0).
+**Easiest:** grab `CleanupSetup.exe` from [Releases](https://github.com/AbhiPoluri/cleanup-app/releases) — self-contained (no .NET needed), per-user install (no admin), with checkboxes for Start Menu shortcut, desktop shortcut, and run-at-signin. Built by CI from `installer/cleanup.iss`; cut a new one by pushing a `v*` tag.
+
+**From source:** needs the [.NET 8 SDK](https://dotnet.microsoft.com/download/dotnet/8.0).
 
 ```powershell
 cd windows
