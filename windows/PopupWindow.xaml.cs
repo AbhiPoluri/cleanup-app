@@ -7,6 +7,7 @@ using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
+using System.Windows.Documents;
 using System.Windows.Input;
 using System.Windows.Interop;
 using System.Windows.Media;
@@ -36,6 +37,8 @@ public partial class PopupWindow : Window
     private bool _refining;
     private bool _closeRequested;
     private bool _pinned;
+    private bool _diffOn;
+    private SolidColorBrush _diffRemovedBrush = new();
 
     // pinned = don't dismiss on focus loss and follow new selections elsewhere.
     // Never persisted — always starts unpinned.
@@ -69,6 +72,11 @@ public partial class PopupWindow : Window
             _refineBorderBrush.BeginAnimation(Brush.OpacityProperty, new DoubleAnimation(0.6, Anim.Ms(150)) { EasingFunction = Anim.EaseOut });
 
         WireMicroInteractions();
+
+        // restore persisted diff-view state (no animation on first layout)
+        _diffOn = Settings.Current.DiffView;
+        RestyleDiffToggle();
+        DiffPanel.Visibility = _diffOn ? Visibility.Visible : Visibility.Collapsed;
 
         Deactivated += (_, _) => { if (!Program.TestMode && !_pinned) SafeClose(); };
         Closing += (_, _) => SaveSize();
@@ -108,7 +116,17 @@ public partial class PopupWindow : Window
         RefineBox.CaretBrush = _t.Text;
         RefinePlaceholder.Foreground = _t.Faint;
         RefineStatus.Foreground = _t.Muted;
+        DiffPanel.Background = _t.Surface2;
+        DiffPanel.BorderBrush = _t.Line;
+        DiffBox.Foreground = _t.Text;
+        DiffBox.Document.PagePadding = new Thickness(0);
+        // mono selection highlight — no system blue
+        DiffBox.SelectionBrush = _t.Muted;
+        DiffBox.SelectionOpacity = 0.35;
+        // Text colour dimmed to ~0.45 for struck-out deletions (private brush)
+        _diffRemovedBrush = new SolidColorBrush(((SolidColorBrush)_t.Text).Color) { Opacity = 0.45 };
         RestylePin();
+        RestyleDiffToggle();
     }
 
     private void RestylePin()
@@ -119,6 +137,99 @@ public partial class PopupWindow : Window
         PinLabel.Foreground = _pinned ? _t.Text : _t.Muted;
         PinLabel.FontWeight = _pinned ? FontWeights.SemiBold : FontWeights.Normal;
         PinLabel.Text = _pinned ? "✦ pinned" : "✦ pin";
+    }
+
+    // ---------- diff view ----------
+
+    private void Diff_Click(object sender, MouseButtonEventArgs e)
+    {
+        e.Handled = true;
+        SetDiff(!_diffOn);
+    }
+
+    private void SetDiff(bool on)
+    {
+        if (on == _diffOn && DiffPanel.Visibility == (on ? Visibility.Visible : Visibility.Collapsed)) return;
+        _diffOn = on;
+        Settings.Current.DiffView = on;
+        Settings.Current.Save();
+        RestyleDiffToggle();
+        Anim.ScalePop(DiffBtn, 1.12, 160);
+
+        if (on)
+        {
+            DiffPanel.Visibility = Visibility.Visible;
+            RenderDiff();
+            Anim.FadeSlideIn(DiffPanel, 6, 140);   // quick fade+slide over the expanding row
+        }
+        else
+        {
+            // fade out, then collapse the row (fade covers the instant layout snap)
+            var fade = new DoubleAnimation(0, Anim.Ms(120)) { EasingFunction = Anim.EaseOut };
+            fade.Completed += (_, _) => { if (!_diffOn) DiffPanel.Visibility = Visibility.Collapsed; };
+            DiffPanel.BeginAnimation(UIElement.OpacityProperty, fade);
+        }
+        Log.Write($"diff view {(on ? "ON" : "OFF")}");
+    }
+
+    private void RestyleDiffToggle()
+    {
+        // Mono theme: on = filled/bordered/bold; off = quiet outline (mirrors pin).
+        DiffBtn.Background = _diffOn ? _t.Surface3 : _t.Surface2;
+        DiffBtn.BorderBrush = _diffOn ? _t.LineStrong : _t.Line;
+        DiffLabel.Foreground = _diffOn ? _t.Text : _t.Muted;
+        DiffLabel.FontWeight = _diffOn ? FontWeights.SemiBold : FontWeights.Normal;
+    }
+
+    // Rebuild the inline diff of _original → selected variant. No-op unless the
+    // panel is on. Renders removed text struck+dim, added text bold on a raised
+    // surface, unchanged text plain — all zero-hue (Mono-legal diff semantics).
+    private void RenderDiff()
+    {
+        if (!_diffOn || DiffBox == null) return;
+        var doc = DiffBox.Document;
+        doc.Blocks.Clear();
+        var para = new Paragraph { Margin = new Thickness(0), LineHeight = 20 };
+
+        string? current = _selected < _results.Length ? _results[_selected] : null;
+        if (current == null)
+        {
+            para.Inlines.Add(DimRun("waiting for variant…"));
+        }
+        else
+        {
+            var segs = Diff.Compute(_original, current);
+            bool changed = segs.Exists(s => s.Kind != DiffKind.Same);
+            if (!changed)
+                para.Inlines.Add(DimRun("no changes"));
+            else
+                foreach (var seg in segs)
+                    para.Inlines.Add(MakeDiffRun(seg));
+        }
+        doc.Blocks.Add(para);
+    }
+
+    private Run DimRun(string text) => new(text) { Foreground = _t.Faint };
+
+    private Run MakeDiffRun(DiffSegment seg)
+    {
+        var run = new Run(seg.Text);
+        switch (seg.Kind)
+        {
+            case DiffKind.Removed:
+                run.Foreground = _diffRemovedBrush;
+                run.TextDecorations = TextDecorations.Strikethrough;
+                break;
+            case DiffKind.Added:
+                run.Foreground = _t.Text;
+                run.FontWeight = FontWeights.SemiBold;
+                run.Background = _t.Surface3;
+                break;
+            default:   // Same
+                run.Foreground = _t.Text;
+                break;
+        }
+        return run;
     }
 
     // ---------- positioning + window chrome (borderless, resizable) ----------
@@ -236,7 +347,8 @@ public partial class PopupWindow : Window
             if (ReferenceEquals(d, CardsScroll) || ReferenceEquals(d, RefineBorder) ||
                 ReferenceEquals(d, ChipsPanel) || ReferenceEquals(d, CopyBtn) ||
                 ReferenceEquals(d, ReplaceBtn) || ReferenceEquals(d, ModelChip) ||
-                ReferenceEquals(d, PinBtn))
+                ReferenceEquals(d, PinBtn) || ReferenceEquals(d, DiffPanel) ||
+                ReferenceEquals(d, DiffBtn))
                 return true;
         }
         return false;
@@ -427,6 +539,9 @@ public partial class PopupWindow : Window
             _cts.Add(cts);
             _ = RunVariant(idx, _cards[idx], cts.Token);
         }
+
+        // fresh selection has no result yet → diff shows its "waiting" state
+        RenderDiff();
     }
 
     private string? StyleLabel(int idx) =>
@@ -439,7 +554,11 @@ public partial class PopupWindow : Window
             var text = await Llm.Complete(Prompts.System, Prompts.Variant(_original, _tone, idx), ct);
             if (ct.IsCancellationRequested) return;
             _results[idx] = text;
-            Dispatcher.Invoke(() => card.SetDone(text, StyleLabel(idx)));
+            Dispatcher.Invoke(() =>
+            {
+                card.SetDone(text, StyleLabel(idx));
+                if (idx == _selected) RenderDiff();
+            });
         }
         catch (Exception ex)
         {
@@ -476,7 +595,7 @@ public partial class PopupWindow : Window
             if (cts.Token.IsCancellationRequested) return;
             Dispatcher.Invoke(() =>
             {
-                if (text != null) { _results[idx] = text; card.SetDone(text, StyleLabel(idx)); }
+                if (text != null) { _results[idx] = text; card.SetDone(text, StyleLabel(idx)); if (idx == _selected) RenderDiff(); }
                 else if (error != null) { _errors[idx] = error; card.SetError(error); }
                 _refining = false;
                 SetRefineBusy(false);
@@ -501,6 +620,7 @@ public partial class PopupWindow : Window
         _selected = i;
         for (int k = 0; k < _cards.Count; k++)
             _cards[k].SetSelected(k == i, animate: true);
+        RenderDiff();
     }
 
     // ---------- actions ----------
@@ -543,6 +663,7 @@ public partial class PopupWindow : Window
         WireButton(ReplaceBtn, 1.0);
         WireButton(PinBtn, 1.0);
         WireButton(ModelChip, 0.85);
+        WireButton(DiffBtn, 1.0);
     }
 
     // Hover raises opacity; press gives a small scale dip. Additive to the
@@ -564,6 +685,7 @@ public partial class PopupWindow : Window
         {
             case Key.Enter: DoReplace(); e.Handled = true; break;
             case Key.R: GenerateAll(); e.Handled = true; break;
+            case Key.D: SetDiff(!_diffOn); e.Handled = true; break;
             case >= Key.D1 and <= Key.D5:
                 SelectCard(e.Key - Key.D1); e.Handled = true; break;
         }

@@ -53,6 +53,7 @@
           <RowDefinition Height="Auto"/>
           <RowDefinition Height="*"/>
           <RowDefinition Height="Auto"/>
+          <RowDefinition Height="Auto"/>
         </Grid.RowDefinitions>
         <WrapPanel x:Name="ChipsPanel" Grid.Row="0"/>
         <Grid Grid.Row="1" Margin="0,12,0,10">
@@ -61,6 +62,7 @@
             <ColumnDefinition Width="180"/>
             <ColumnDefinition Width="Auto"/>
             <ColumnDefinition Width="*"/>
+            <ColumnDefinition Width="Auto"/>
           </Grid.ColumnDefinitions>
           <TextBlock x:Name="VariantsLabel" Text="VARIANTS" FontSize="10" FontFamily="Consolas"
                      VerticalAlignment="Center" Margin="0,0,12,0"/>
@@ -70,11 +72,23 @@
           <TextBlock x:Name="CountLabel" Grid.Column="2" FontSize="13" FontWeight="SemiBold"
                      FontFamily="Consolas" VerticalAlignment="Center" Margin="10,0,10,0"/>
           <TextBlock x:Name="ModeHint" Grid.Column="3" FontSize="11" VerticalAlignment="Center"/>
+          <Border x:Name="DiffBtn" Grid.Column="4" CornerRadius="5" BorderThickness="1"
+                  Padding="8,3" Cursor="Hand" MouseLeftButtonUp="Diff_Click"
+                  ToolTip="Diff — show what the selected variant changes (Ctrl+D)">
+            <TextBlock x:Name="DiffLabel" Text="◫ diff" FontSize="11"/>
+          </Border>
         </Grid>
         <ScrollViewer x:Name="CardsScroll" Grid.Row="2" VerticalScrollBarVisibility="Auto">
           <StackPanel x:Name="CardsPanel"/>
         </ScrollViewer>
-        <Border x:Name="RefineBorder" Grid.Row="3" CornerRadius="8" BorderThickness="1" Margin="0,12,0,0" Padding="12,8">
+        <Border x:Name="DiffPanel" Grid.Row="3" CornerRadius="8" BorderThickness="1"
+                Margin="0,12,0,0" Padding="10,7" Visibility="Collapsed">
+          <RichTextBox x:Name="DiffBox" FontSize="13" IsReadOnly="True" IsDocumentEnabled="True"
+                       BorderThickness="0" Background="Transparent" Padding="0" IsTabStop="False"
+                       MaxHeight="140" VerticalScrollBarVisibility="Auto"
+                       HorizontalScrollBarVisibility="Disabled"/>
+        </Border>
+        <Border x:Name="RefineBorder" Grid.Row="4" CornerRadius="8" BorderThickness="1" Margin="0,12,0,0" Padding="12,8">
           <Grid>
             <Grid.ColumnDefinitions>
               <ColumnDefinition Width="*"/>

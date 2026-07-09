@@ -16,6 +16,8 @@ public class Settings
     public string DefaultTone { get; set; } = "Clean";
     public int DefaultCount { get; set; } = 3;
     public bool FloatingButton { get; set; } = true;
+    // inline diff panel toggle — persists across popup opens
+    public bool DiffView { get; set; } = false;
     // last popup size (DIPs) — restored on next open; clamped to the mins below
     public double PopupWidth { get; set; } = 640;
     public double PopupHeight { get; set; } = 540;
