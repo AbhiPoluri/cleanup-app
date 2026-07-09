@@ -4,6 +4,8 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Interop;
+using System.Windows.Media;
+using System.Windows.Media.Animation;
 using System.Windows.Threading;
 
 namespace Cleanup;
@@ -175,6 +177,9 @@ public sealed class FloatingButtonWindow : Window
     private const double BtnDip = 30;
 
     private readonly DispatcherTimer _autoHide = new() { Interval = TimeSpan.FromSeconds(4) };
+    private readonly Border _border;
+    private readonly ScaleTransform _scale = new(1, 1);
+    private bool _hiding;
 
     public FloatingButtonWindow(Action onClick)
     {
@@ -208,9 +213,12 @@ public sealed class FloatingButtonWindow : Window
             },
         };
         border.MouseLeftButtonUp += (_, e) => { e.Handled = true; onClick(); };
+        border.RenderTransformOrigin = new Point(0.5, 0.5);
+        border.RenderTransform = _scale;
+        _border = border;
         Content = border;
 
-        _autoHide.Tick += (_, _) => { _autoHide.Stop(); Hide(); };
+        _autoHide.Tick += (_, _) => { _autoHide.Stop(); HideButton(); };
     }
 
     protected override void OnSourceInitialized(EventArgs e)
@@ -236,6 +244,17 @@ public sealed class FloatingButtonWindow : Window
         int y = screenY - (int)Math.Round(46 * s);
         if (y < (int)Math.Round(4 * s)) y = screenY + (int)Math.Round(20 * s);
         SetWindowPos(h, HWND_TOPMOST, x, y, size, size, SWP_NOACTIVATE | SWP_SHOWWINDOW);
+
+        // fade + scale in (~120ms). Cancels any in-flight hide.
+        _hiding = false;
+        var d = new Duration(TimeSpan.FromMilliseconds(120));
+        var ease = new QuadraticEase { EasingMode = EasingMode.EaseOut };
+        _border.Opacity = 0;
+        _scale.ScaleX = _scale.ScaleY = 0.8;
+        _border.BeginAnimation(OpacityProperty, new DoubleAnimation(0, 1, d) { EasingFunction = ease });
+        _scale.BeginAnimation(ScaleTransform.ScaleXProperty, new DoubleAnimation(0.8, 1, d) { EasingFunction = ease });
+        _scale.BeginAnimation(ScaleTransform.ScaleYProperty, new DoubleAnimation(0.8, 1, d) { EasingFunction = ease });
+
         _autoHide.Stop();
         _autoHide.Start();
     }
@@ -243,7 +262,24 @@ public sealed class FloatingButtonWindow : Window
     public void HideButton()
     {
         _autoHide.Stop();
-        if (IsVisible) Hide();
+        if (!IsVisible || _hiding) return;
+        _hiding = true;
+
+        var d = new Duration(TimeSpan.FromMilliseconds(100));
+        var ease = new QuadraticEase { EasingMode = EasingMode.EaseOut };
+        var fade = new DoubleAnimation(0, d) { EasingFunction = ease };
+        fade.Completed += (_, _) =>
+        {
+            if (!_hiding) return;   // a re-show raced us — keep it visible
+            _hiding = false;
+            Hide();
+            _border.BeginAnimation(OpacityProperty, null);
+            _border.Opacity = 1;
+            _scale.ScaleX = _scale.ScaleY = 1;
+        };
+        _scale.BeginAnimation(ScaleTransform.ScaleXProperty, new DoubleAnimation(0.9, d) { EasingFunction = ease });
+        _scale.BeginAnimation(ScaleTransform.ScaleYProperty, new DoubleAnimation(0.9, d) { EasingFunction = ease });
+        _border.BeginAnimation(OpacityProperty, fade);
     }
 
     [DllImport("user32.dll")] private static extern bool GetWindowRect(IntPtr hWnd, out RECT rect);

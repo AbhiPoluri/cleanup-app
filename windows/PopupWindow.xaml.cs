@@ -10,6 +10,7 @@ using System.Windows.Controls.Primitives;
 using System.Windows.Input;
 using System.Windows.Interop;
 using System.Windows.Media;
+using System.Windows.Media.Animation;
 using System.Windows.Threading;
 
 namespace Cleanup;
@@ -29,9 +30,11 @@ public partial class PopupWindow : Window
     private string?[] _errors = Array.Empty<string?>();
     private readonly List<CancellationTokenSource> _cts = new();
     private readonly List<Border> _chipBorders = new();
+    private readonly List<VariantCard> _cards = new();
+    private SolidColorBrush _refineBorderBrush = new();
     private TextBox? _customToneBox;
     private bool _refining;
-    private bool _closing;
+    private bool _closeRequested;
     private bool _pinned;
 
     // pinned = don't dismiss on focus loss and follow new selections elsewhere.
@@ -60,11 +63,21 @@ public partial class PopupWindow : Window
         ModelChip.MouseLeftButtonUp += (_, _) => AppController.OpenSettings();
         RefineBox.TextChanged += (_, _) =>
             RefinePlaceholder.Visibility = RefineBox.Text.Length == 0 ? Visibility.Visible : Visibility.Collapsed;
+        RefineBox.GotFocus += (_, _) =>
+            _refineBorderBrush.BeginAnimation(Brush.OpacityProperty, new DoubleAnimation(1.0, Anim.Ms(150)) { EasingFunction = Anim.EaseOut });
+        RefineBox.LostFocus += (_, _) =>
+            _refineBorderBrush.BeginAnimation(Brush.OpacityProperty, new DoubleAnimation(0.6, Anim.Ms(150)) { EasingFunction = Anim.EaseOut });
+
+        WireMicroInteractions();
 
         Deactivated += (_, _) => { if (!Program.TestMode && !_pinned) SafeClose(); };
-        Closing += (_, _) => { _closing = true; SaveSize(); };
+        Closing += (_, _) => SaveSize();
         Closed += (_, _) => CancelAll();
         PreviewKeyDown += OnPreviewKeyDown;
+
+        // entrance: fade + scale-from-0.97 + rise, started once the tree is realised.
+        Opacity = 0;
+        Loaded += (_, _) => PlayEntrance();
 
         GenerateAll();
     }
@@ -87,7 +100,10 @@ public partial class PopupWindow : Window
         ReplaceBtn.Background = _t.Accent;
         ReplaceLabel.Foreground = _t.OnAccent;
         RefineBorder.Background = _t.Surface2;
-        RefineBorder.BorderBrush = _t.LineStrong;
+        // private (unshared) brush so its Opacity can be animated on focus/blur
+        // without touching every other element that uses LineStrong.
+        _refineBorderBrush = new SolidColorBrush(((SolidColorBrush)_t.LineStrong).Color) { Opacity = 0.6 };
+        RefineBorder.BorderBrush = _refineBorderBrush;
         RefineBox.Foreground = _t.Text;
         RefineBox.CaretBrush = _t.Text;
         RefinePlaceholder.Foreground = _t.Faint;
@@ -239,6 +255,7 @@ public partial class PopupWindow : Window
         if (on == _pinned) return;
         _pinned = on;
         RestylePin();
+        Anim.ScalePop(PinBtn, 1.12, 160);
         Log.Write($"pinned mode {(on ? "ON" : "OFF")}");
     }
 
@@ -251,6 +268,9 @@ public partial class PopupWindow : Window
         Log.Write($"pinned: new selection ({newText.Length} chars) — regenerating");
         _original = newText;
         _targetHwnd = hwnd;
+        // visibly acknowledge the caught selection: dip the card area, then the
+        // fresh cards stagger back in over the recovering dip.
+        Anim.Dip(CardsScroll, 0.35, 320);
         GenerateAll();
     }
 
@@ -276,6 +296,10 @@ public partial class PopupWindow : Window
                 Tag = tone,
             };
             chip.MouseLeftButtonUp += (_, _) => { SetTone(tone); };
+            chip.MouseEnter += (_, _) => { if ((string)chip.Tag != _tone) Anim.OpacityTo(chip, 1.0, 100); };
+            chip.MouseLeave += (_, _) => { if ((string)chip.Tag != _tone) Anim.OpacityTo(chip, 0.9, 120); Anim.ScaleTo(chip, 1.0, 90); };
+            chip.PreviewMouseLeftButtonDown += (_, _) => Anim.ScaleTo(chip, 0.95, 80);
+            chip.PreviewMouseLeftButtonUp += (_, _) => Anim.ScaleTo(chip, 1.0, 90);
             _chipBorders.Add(chip);
             ChipsPanel.Children.Add(chip);
         }
@@ -316,6 +340,7 @@ public partial class PopupWindow : Window
             var label = (TextBlock)chip.Child;
             label.Foreground = on ? _t.Text : _t.Muted;
             label.FontWeight = on ? FontWeights.SemiBold : FontWeights.Normal;
+            Anim.OpacityTo(chip, on ? 1.0 : 0.9, 100);
         }
     }
 
@@ -324,6 +349,8 @@ public partial class PopupWindow : Window
         if (tone == _tone) return;
         _tone = tone;
         RestyleChips();
+        var picked = _chipBorders.FirstOrDefault(c => (string)c.Tag == tone);
+        if (picked != null) Anim.ScalePop(picked);
         GenerateAll();
     }
 
@@ -334,7 +361,11 @@ public partial class PopupWindow : Window
     private void Slider_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
     {
         int n = (int)Math.Round(e.NewValue);
-        if (CountLabel != null) CountLabel.Text = n.ToString();
+        if (CountLabel != null)
+        {
+            if (CountLabel.Text != n.ToString()) Anim.ScalePop(CountLabel, 1.18, 150);
+            CountLabel.Text = n.ToString();
+        }
         if (ModeHint != null) ModeHint.Text = n == 1 ? "single rewrite" : "pick a card";
         if (n == _count) return;
         // debounce so dragging across ticks doesn't fire a request per tick
@@ -358,39 +389,64 @@ public partial class PopupWindow : Window
         foreach (var c in _cts) c.Cancel();
         _cts.Clear();
         _refining = false;
-        RefineStatus.Text = "↵";
+        if (RefineBox != null) RefineBox.IsEnabled = true;
+        if (RefineBorder != null)
+        {
+            RefineBorder.BeginAnimation(UIElement.OpacityProperty, null);
+            RefineBorder.Opacity = 1;
+        }
+        if (RefineStatus != null) RefineStatus.Text = "↵";
     }
 
     private void GenerateAll()
     {
         CancelAll();
+        foreach (var c in _cards) c.StopDots();
+        _cards.Clear();
+        CardsPanel.Children.Clear();
         _results = new string?[_count];
         _errors = new string?[_count];
         _selected = 0;
-        RebuildCards();
+
+        for (int i = 0; i < _count; i++)
+        {
+            int idx = i;
+            var card = new VariantCard(idx, _t, SelectCard);
+            card.EnterFresh();
+            card.SetSelected(idx == 0, animate: false);
+            _cards.Add(card);
+            CardsPanel.Children.Add(card.Root);
+            // stagger the cards in as a skeleton: fade + rise ~8px, ~50ms apart.
+            Anim.FadeSlideIn(card.Root, 8, 180, beginMs: idx * 50);
+        }
+
         for (int i = 0; i < _count; i++)
         {
             int idx = i;
             var cts = new CancellationTokenSource();
             _cts.Add(cts);
-            _ = RunVariant(idx, cts.Token);
+            _ = RunVariant(idx, _cards[idx], cts.Token);
         }
     }
 
-    private async Task RunVariant(int idx, CancellationToken ct)
+    private string? StyleLabel(int idx) =>
+        _count > 1 ? Prompts.Styles[idx % Prompts.Styles.Length].Label : null;
+
+    private async Task RunVariant(int idx, VariantCard card, CancellationToken ct)
     {
         try
         {
             var text = await Llm.Complete(Prompts.System, Prompts.Variant(_original, _tone, idx), ct);
             if (ct.IsCancellationRequested) return;
             _results[idx] = text;
+            Dispatcher.Invoke(() => card.SetDone(text, StyleLabel(idx)));
         }
         catch (Exception ex)
         {
             if (ct.IsCancellationRequested) return;
             _errors[idx] = ex.Message;
+            Dispatcher.Invoke(() => card.SetError(ex.Message));
         }
-        Dispatcher.Invoke(RebuildCards);
     }
 
     private void RefineBox_KeyDown(object sender, KeyEventArgs e)
@@ -398,138 +454,106 @@ public partial class PopupWindow : Window
         if (e.Key != Key.Enter) return;
         var instruction = RefineBox.Text.Trim();
         var current = _selected < _results.Length ? _results[_selected] : null;
-        if (instruction.Length == 0 || current == null || _refining) return;
+        if (instruction.Length == 0 || current == null || _refining || _selected >= _cards.Count) return;
+
+        var card = _cards[_selected];
+        Anim.ScalePop(RefineStatus, 1.3, 150);   // Enter-to-send pressed feedback
         RefineBox.Text = "";
         _refining = true;
-        RefineStatus.Text = "…";
+        SetRefineBusy(true);
+        card.ShowRefineLoading();
         int idx = _selected;
         var cts = new CancellationTokenSource();
         _cts.Add(cts);
         _ = Task.Run(async () =>
         {
+            string? text = null, error = null;
             try
             {
-                var text = await Llm.Complete(Prompts.System, Prompts.Refine(current, instruction), cts.Token);
-                if (!cts.Token.IsCancellationRequested) _results[idx] = text;
+                text = await Llm.Complete(Prompts.System, Prompts.Refine(current, instruction), cts.Token);
             }
-            catch (Exception ex)
-            {
-                if (!cts.Token.IsCancellationRequested) _errors[idx] = ex.Message;
-            }
+            catch (Exception ex) { error = ex.Message; }
+            if (cts.Token.IsCancellationRequested) return;
             Dispatcher.Invoke(() =>
             {
+                if (text != null) { _results[idx] = text; card.SetDone(text, StyleLabel(idx)); }
+                else if (error != null) { _errors[idx] = error; card.SetError(error); }
                 _refining = false;
-                RefineStatus.Text = "↵";
-                RebuildCards();
+                SetRefineBusy(false);
+                RefineBox.Focus();
             });
         });
     }
 
-    // ---------- cards ----------
-
-    private void RebuildCards()
+    // Dim + disable the refine input while a tuning prompt is in flight; the
+    // selected card carries the visible loading pulse.
+    private void SetRefineBusy(bool busy)
     {
-        CardsPanel.Children.Clear();
-        for (int i = 0; i < _count; i++)
-        {
-            int idx = i;
-            bool sel = idx == _selected;
-
-            var content = new StackPanel();
-            if (_errors[idx] != null)
-            {
-                content.Children.Add(new TextBlock
-                {
-                    Text = "⚠ " + _errors[idx] + " — check Settings",
-                    FontSize = 12,
-                    Foreground = _t.Muted,
-                    TextWrapping = TextWrapping.Wrap,
-                });
-            }
-            else if (_results[idx] == null)
-            {
-                content.Children.Add(new TextBlock
-                {
-                    Text = "writing…",
-                    FontSize = 12,
-                    Foreground = _t.Faint,
-                });
-            }
-            else
-            {
-                content.Children.Add(new TextBlock
-                {
-                    Text = _results[idx],
-                    FontSize = 13,
-                    Foreground = _t.Text,
-                    TextWrapping = TextWrapping.Wrap,
-                });
-                if (_count > 1)
-                {
-                    content.Children.Add(new TextBlock
-                    {
-                        Text = Prompts.Styles[idx % Prompts.Styles.Length].Label,
-                        FontSize = 10,
-                        FontFamily = new System.Windows.Media.FontFamily("Consolas"),
-                        Foreground = _t.Faint,
-                        Margin = new Thickness(0, 4, 0, 0),
-                    });
-                }
-            }
-
-            var numBadge = new Border
-            {
-                Child = new TextBlock
-                {
-                    Text = (idx + 1).ToString(),
-                    FontSize = 10,
-                    FontFamily = new System.Windows.Media.FontFamily("Consolas"),
-                    Foreground = sel ? _t.Text : _t.Faint,
-                },
-                BorderBrush = sel ? _t.LineStrong : _t.Line,
-                BorderThickness = new Thickness(1),
-                CornerRadius = new CornerRadius(4),
-                Padding = new Thickness(5, 1, 5, 1),
-                Margin = new Thickness(0, 2, 10, 0),
-                VerticalAlignment = VerticalAlignment.Top,
-            };
-
-            var row = new DockPanel();
-            DockPanel.SetDock(numBadge, Dock.Left);
-            row.Children.Add(numBadge);
-            row.Children.Add(content);
-
-            var card = new Border
-            {
-                Child = row,
-                Background = sel ? _t.Surface3 : _t.Surface2,
-                BorderBrush = sel ? _t.Accent : _t.Line,
-                BorderThickness = new Thickness(1),
-                CornerRadius = new CornerRadius(9),
-                Padding = new Thickness(11),
-                Margin = new Thickness(0, 0, 0, 8),
-                Cursor = Cursors.Hand,
-            };
-            card.MouseLeftButtonUp += (_, _) => SelectCard(idx);
-            CardsPanel.Children.Add(card);
-        }
+        RefineBox.IsEnabled = !busy;
+        Anim.OpacityTo(RefineBorder, busy ? 0.55 : 1.0, 140);
     }
+
+    // ---------- cards ----------
 
     private void SelectCard(int i)
     {
-        if (i < 0 || i >= _count) return;
+        if (i < 0 || i >= _cards.Count) return;
         _selected = i;
-        RebuildCards();
+        for (int k = 0; k < _cards.Count; k++)
+            _cards[k].SetSelected(k == i, animate: true);
     }
 
     // ---------- actions ----------
 
-    // Close() during close (Esc → Close → Deactivated → Close again) throws in WPF
+    // ---------- lifecycle animation ----------
+
+    private void PlayEntrance()
+    {
+        var (s, t) = Anim.Transforms(Root);
+        s.ScaleX = s.ScaleY = 0.97;
+        t.Y = 6;
+        BeginAnimation(OpacityProperty, new DoubleAnimation(0, 1, Anim.Ms(160)) { EasingFunction = Anim.EaseOut });
+        s.BeginAnimation(ScaleTransform.ScaleXProperty, new DoubleAnimation(0.97, 1, Anim.Ms(160)) { EasingFunction = Anim.EaseOut });
+        s.BeginAnimation(ScaleTransform.ScaleYProperty, new DoubleAnimation(0.97, 1, Anim.Ms(160)) { EasingFunction = Anim.EaseOut });
+        t.BeginAnimation(TranslateTransform.YProperty, new DoubleAnimation(6, 0, Anim.Ms(160)) { EasingFunction = Anim.EaseOut });
+    }
+
+    // Close() during close (Esc → Close → Deactivated → Close again) throws in WPF.
+    // We now also animate out first; _closeRequested makes the whole thing
+    // idempotent, so a second close request mid-animation is a no-op (never a
+    // second Close() — that was the historical crash).
     public void SafeClose()
     {
-        if (_closing) return;
-        _closing = true;
-        Close();
+        if (_closeRequested) return;
+        _closeRequested = true;
+
+        var (s, _) = Anim.Transforms(Root);
+        var fade = new DoubleAnimation(0, Anim.Ms(120)) { EasingFunction = Anim.EaseOut };
+        fade.Completed += (_, _) => { try { Close(); } catch { } };
+        s.BeginAnimation(ScaleTransform.ScaleXProperty, new DoubleAnimation(0.98, Anim.Ms(120)) { EasingFunction = Anim.EaseOut });
+        s.BeginAnimation(ScaleTransform.ScaleYProperty, new DoubleAnimation(0.98, Anim.Ms(120)) { EasingFunction = Anim.EaseOut });
+        BeginAnimation(OpacityProperty, fade);
+    }
+
+    // ---------- micro-interactions ----------
+
+    private void WireMicroInteractions()
+    {
+        WireButton(CopyBtn, 0.9);
+        WireButton(ReplaceBtn, 1.0);
+        WireButton(PinBtn, 1.0);
+        WireButton(ModelChip, 0.85);
+    }
+
+    // Hover raises opacity; press gives a small scale dip. Additive to the
+    // existing MouseLeftButtonUp click handlers (uses tunneling Preview events).
+    private static void WireButton(Border b, double baseOp)
+    {
+        b.Opacity = baseOp;
+        b.MouseEnter += (_, _) => Anim.OpacityTo(b, 1.0, 100);
+        b.MouseLeave += (_, _) => { Anim.OpacityTo(b, baseOp, 120); Anim.ScaleTo(b, 1.0, 90); };
+        b.PreviewMouseLeftButtonDown += (_, _) => Anim.ScaleTo(b, 0.95, 80);
+        b.PreviewMouseLeftButtonUp += (_, _) => Anim.ScaleTo(b, 1.0, 90);
     }
 
     private void OnPreviewKeyDown(object sender, KeyEventArgs e)
