@@ -18,6 +18,12 @@ public class Settings
     public bool FloatingButton { get; set; } = true;
     // inline diff panel toggle — persists across popup opens
     public bool DiffView { get; set; } = false;
+    // click-away dismissal — OFF by default (popup stays open until Esc / ✕ / Copy / Replace)
+    public bool AutoClose { get; set; } = false;
+    // floating ✦ button logical size (DIPs), 22–48; 30 = original hardcoded size
+    public double FloatingButtonSize { get; set; } = 30;
+    // popup content text size (DIPs), 11–18; 13 = original card/diff/refine size
+    public double FontSize { get; set; } = 13;
     // last popup size (DIPs) — restored on next open; clamped to the mins below
     public double PopupWidth { get; set; } = 640;
     public double PopupHeight { get; set; } = 540;

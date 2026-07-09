@@ -37,8 +37,8 @@ public sealed class SelectionWatcher : IDisposable
     private readonly IntPtr _hook;
     private readonly Action _onClicked;
     private readonly Func<bool> _popupOpen;
-    private readonly Func<bool> _pinned;
-    private readonly Action<string, IntPtr> _onPinnedText;
+    private readonly Func<bool> _autoMode;
+    private readonly Action<string, IntPtr> _onAutoText;
     private readonly uint _pid = (uint)Environment.ProcessId;
 
     private FloatingButtonWindow? _button;
@@ -47,12 +47,12 @@ public sealed class SelectionWatcher : IDisposable
     private POINT _lastUpAt;
 
     public SelectionWatcher(Action onClicked, Func<bool> popupOpen,
-                            Func<bool> pinned, Action<string, IntPtr> onPinnedText)
+                            Func<bool> autoMode, Action<string, IntPtr> onAutoText)
     {
         _onClicked = onClicked;
         _popupOpen = popupOpen;
-        _pinned = pinned;
-        _onPinnedText = onPinnedText;
+        _autoMode = autoMode;
+        _onAutoText = onAutoText;
         _proc = Hook;
         _hook = SetWindowsHookEx(WH_MOUSE_LL, _proc, GetModuleHandle(null), 0);
         Log.Write(_hook == IntPtr.Zero
@@ -98,20 +98,20 @@ public sealed class SelectionWatcher : IDisposable
         // never react to selections made inside our own popup / floating button
         if (IsOurWindowAt(pt)) return;
 
-        // pinned: the popup itself is the receiver — capture the new selection and
-        // feed it in (no floating button). Same 250ms settle as the normal path.
-        if (_pinned())
+        // auto mode: the popup itself is the receiver — capture the new selection
+        // and feed it in (no floating button). Same 250ms settle as the normal path.
+        if (_autoMode())
         {
-            Log.Write($"pinned gesture: dragged={dragged} dbl={doubleClick} — capturing selection");
-            var pinTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(250) };
-            pinTimer.Tick += async (_, _) =>
+            Log.Write($"auto gesture: dragged={dragged} dbl={doubleClick} — capturing selection");
+            var autoTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(250) };
+            autoTimer.Tick += async (_, _) =>
             {
-                pinTimer.Stop();
+                autoTimer.Stop();
                 var (text, hwnd) = await Capture.GrabSelection();
                 if (!string.IsNullOrWhiteSpace(text))
-                    _onPinnedText(text!, hwnd);
+                    _onAutoText(text!, hwnd);
             };
-            pinTimer.Start();
+            autoTimer.Start();
             return;
         }
 
@@ -173,11 +173,14 @@ public sealed class FloatingButtonWindow : Window
     private static readonly IntPtr HWND_TOPMOST = new(-1);
     private const uint SWP_NOACTIVATE = 0x0010, SWP_SHOWWINDOW = 0x0040;
 
-    // logical (DIP) button size; physical size scales with the target monitor DPI
-    private const double BtnDip = 30;
+    // logical (DIP) button size; user-configurable (Settings.FloatingButtonSize,
+    // 22–48, default 30). Read fresh on each ShowNear so a size change in Settings
+    // takes effect on the next appearance. Physical size scales with monitor DPI.
+    private static double BtnDip => Math.Clamp(Settings.Current.FloatingButtonSize, 22, 48);
 
     private readonly DispatcherTimer _autoHide = new() { Interval = TimeSpan.FromSeconds(4) };
     private readonly Border _border;
+    private readonly TextBlock _glyph;
     private readonly ScaleTransform _scale = new(1, 1);
     private bool _hiding;
 
@@ -203,10 +206,10 @@ public sealed class FloatingButtonWindow : Window
             BorderBrush = t.LineStrong,
             BorderThickness = new Thickness(1),
             Cursor = Cursors.Hand,
-            Child = new TextBlock
+            Child = _glyph = new TextBlock
             {
                 Text = "✦",
-                FontSize = 13,
+                FontSize = BtnDip * 0.43,   // ~13 at size 30; scales with the button
                 Foreground = t.Accent,
                 HorizontalAlignment = HorizontalAlignment.Center,
                 VerticalAlignment = VerticalAlignment.Center,
@@ -231,6 +234,14 @@ public sealed class FloatingButtonWindow : Window
 
     public void ShowNear(int screenX, int screenY)
     {
+        // pick up the current configured size before realizing/placing the window
+        double dip = BtnDip;
+        Width = dip; Height = dip;
+        // corner-radius = height/2 keeps it a perfect circle (WPF won't clamp an
+        // oversized radius like CSS, so it must track the live size, not a const).
+        _border.CornerRadius = new CornerRadius(dip / 2);
+        _glyph.FontSize = dip * 0.43;
+
         if (!IsVisible) Show(); // realize the HWND
         var h = new WindowInteropHelper(this).Handle;
         // Size and offsets in device px, scaled to the target monitor's DPI so the
@@ -239,7 +250,7 @@ public sealed class FloatingButtonWindow : Window
         // HWND_TOPMOST pins it above the foreground app without stealing focus.
         uint dpi = ScreenUtil.DpiForPoint(screenX, screenY);
         double s = dpi / 96.0;
-        int size = (int)Math.Round(BtnDip * s);
+        int size = (int)Math.Round(dip * s);
         int x = screenX + (int)Math.Round(16 * s);
         int y = screenY - (int)Math.Round(46 * s);
         if (y < (int)Math.Round(4 * s)) y = screenY + (int)Math.Round(20 * s);

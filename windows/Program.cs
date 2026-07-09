@@ -64,11 +64,12 @@ public sealed class AppController : IDisposable
         {
             Icon = MakeTrayIcon(),
             Visible = true,
-            Text = $"Cleanup — {Settings.Current.HotkeyDisplay} on selected text",
+            Text = TrayTip(),
         };
         var menu = new WF.ContextMenuStrip();
         menu.Items.Add("Test Popup", null, (_, _) => ShowPopup(Program.SampleText, IntPtr.Zero));
         menu.Items.Add("Settings…", null, (_, _) => OpenSettings());
+        menu.Items.Add("Check for Updates…", null, (_, _) => OpenSettings());
         menu.Items.Add("Test ✦ Button", null, (_, _) =>
         {
             var p = WF.Cursor.Position;
@@ -90,15 +91,18 @@ public sealed class AppController : IDisposable
         _watcher = new SelectionWatcher(
             OnHotkey,
             () => _popup != null,
-            () => _popup?.IsPinned == true,
+            () => _popup?.IsAutoMode == true,
             (text, hwnd) => _popup?.UpdateSource(text, hwnd));
     }
 
     public void RefreshHotkey()
     {
         _hotkey.Reregister();
-        _tray.Text = $"Cleanup — {Settings.Current.HotkeyDisplay} on selected text";
+        _tray.Text = TrayTip();
     }
+
+    private static string TrayTip() =>
+        $"Cleanup {Updater.DisplayVersion} — {Settings.Current.HotkeyDisplay} on selected text";
 
     private async void OnHotkey()
     {

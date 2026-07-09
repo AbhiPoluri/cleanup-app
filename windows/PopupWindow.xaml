@@ -15,15 +15,22 @@
           <ColumnDefinition Width="*"/>
           <ColumnDefinition Width="Auto"/>
           <ColumnDefinition Width="Auto"/>
+          <ColumnDefinition Width="Auto"/>
         </Grid.ColumnDefinitions>
         <TextBlock x:Name="TitleLabel" Text="Cleanup" FontSize="12" FontWeight="SemiBold"/>
-        <Border x:Name="PinBtn" Grid.Column="1" CornerRadius="5" BorderThickness="1"
-                Padding="7,3" Margin="0,0,8,0" Cursor="Hand" MouseLeftButtonUp="Pin_Click"
-                ToolTip="Pin — keep open and follow new selections">
-          <TextBlock x:Name="PinLabel" Text="✦ pin" FontSize="11"/>
+        <Border x:Name="AutoBtn" Grid.Column="1" CornerRadius="5" BorderThickness="1"
+                Padding="7,3" Margin="0,0,8,0" Cursor="Hand" MouseLeftButtonUp="Auto_Click"
+                ToolTip="Auto — capture new selections as you highlight them">
+          <TextBlock x:Name="AutoLabel" Text="⟳ auto" FontSize="11"/>
         </Border>
-        <Border x:Name="ModelChip" Grid.Column="2" CornerRadius="5" BorderThickness="1" Padding="8,3">
+        <Border x:Name="ModelChip" Grid.Column="2" CornerRadius="5" BorderThickness="1"
+                Padding="8,3" Margin="0,0,8,0">
           <TextBlock x:Name="ModelLabel" FontSize="11"/>
+        </Border>
+        <Border x:Name="CloseBtn" Grid.Column="3" CornerRadius="5" BorderThickness="1"
+                Padding="7,3" Cursor="Hand" MouseLeftButtonUp="Close_Click"
+                ToolTip="Close (Esc)">
+          <TextBlock x:Name="CloseLabel" Text="✕" FontSize="11"/>
         </Border>
       </Grid>
 
@@ -63,6 +70,7 @@
             <ColumnDefinition Width="Auto"/>
             <ColumnDefinition Width="*"/>
             <ColumnDefinition Width="Auto"/>
+            <ColumnDefinition Width="Auto"/>
           </Grid.ColumnDefinitions>
           <TextBlock x:Name="VariantsLabel" Text="VARIANTS" FontSize="10" FontFamily="Consolas"
                      VerticalAlignment="Center" Margin="0,0,12,0"/>
@@ -73,9 +81,14 @@
                      FontFamily="Consolas" VerticalAlignment="Center" Margin="10,0,10,0"/>
           <TextBlock x:Name="ModeHint" Grid.Column="3" FontSize="11" VerticalAlignment="Center"/>
           <Border x:Name="DiffBtn" Grid.Column="4" CornerRadius="5" BorderThickness="1"
-                  Padding="8,3" Cursor="Hand" MouseLeftButtonUp="Diff_Click"
+                  Padding="8,3" Margin="0,0,8,0" Cursor="Hand" MouseLeftButtonUp="Diff_Click"
                   ToolTip="Diff — show what the selected variant changes (Ctrl+D)">
             <TextBlock x:Name="DiffLabel" Text="◫ diff" FontSize="11"/>
+          </Border>
+          <Border x:Name="PopOutBtn" Grid.Column="5" CornerRadius="5" BorderThickness="1"
+                  Padding="8,3" Cursor="Hand" MouseLeftButtonUp="PopOut_Click"
+                  ToolTip="Pop out — open the red/green diff in a separate window">
+            <TextBlock x:Name="PopOutLabel" Text="⧉ pop out" FontSize="11"/>
           </Border>
         </Grid>
         <ScrollViewer x:Name="CardsScroll" Grid.Row="2" VerticalScrollBarVisibility="Auto">

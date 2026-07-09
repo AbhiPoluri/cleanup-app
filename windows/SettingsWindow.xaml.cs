@@ -30,11 +30,72 @@ public partial class SettingsWindow : Window
         SelectByContent(ToneBox, s.DefaultTone);
         SelectByContent(CountBox, s.DefaultCount.ToString());
         FloatingButtonCheck.IsChecked = s.FloatingButton;
+        AutoCloseCheck.IsChecked = s.AutoClose;
+        ButtonSizeSlider.Value = Math.Clamp(s.FloatingButtonSize, 22, 48);
+        FontSizeSlider.Value = Math.Clamp(s.FontSize, 11, 18);
         HotkeyBox.Text = _hkDisplay;
         CodexStatusLabel.Text = Llm.CodexStatus();
+        VersionLabel.Text = Updater.IsDevBuild ? "dev build — update check only" : Updater.DisplayVersion;
 
         UpdatePanels();
         _ = LoadOllamaModels();
+    }
+
+    private UpdateInfo? _pendingUpdate;
+
+    private async void Update_Click(object sender, RoutedEventArgs e)
+    {
+        // Second click when an update is staged → download + install.
+        if (_pendingUpdate is { UpdateAvailable: true, DownloadUrl.Length: > 0 })
+        {
+            UpdateBtn.IsEnabled = false;
+            SetUpdateStatus("downloading…");
+            var ok = await Updater.DownloadAndRunAsync(_pendingUpdate);
+            if (ok)
+            {
+                SetUpdateStatus("installing — Cleanup will restart");
+                Application.Current.Shutdown();
+            }
+            else
+            {
+                UpdateBtn.IsEnabled = true;
+                SetUpdateStatus("update failed — see the log (tray → Open Log)");
+            }
+            return;
+        }
+
+        // First click → check GitHub.
+        UpdateBtn.IsEnabled = false;
+        SetUpdateStatus("checking for updates…");
+        var info = await Updater.CheckAsync();
+        UpdateBtn.IsEnabled = true;
+
+        if (info.Error != null)
+        {
+            SetUpdateStatus("couldn't check for updates — check your connection");
+        }
+        else if (info.UpdateAvailable && info.DownloadUrl.Length > 0)
+        {
+            _pendingUpdate = info;
+            var label = info.LatestVersion.StartsWith("v", StringComparison.OrdinalIgnoreCase)
+                ? info.LatestVersion : "v" + info.LatestVersion;
+            SetUpdateStatus($"{label} available");
+            UpdateBtn.Content = "Update now";
+        }
+        else if (info.UpdateAvailable)
+        {
+            SetUpdateStatus("a newer version exists but its installer is missing");
+        }
+        else
+        {
+            SetUpdateStatus("up to date");
+        }
+    }
+
+    private void SetUpdateStatus(string text)
+    {
+        UpdateStatus.Text = text;
+        UpdateStatus.Visibility = Visibility.Visible;
     }
 
     private async System.Threading.Tasks.Task LoadOllamaModels()
@@ -71,6 +132,16 @@ public partial class SettingsWindow : Window
         (string)((ComboBoxItem?)BackendBox.SelectedItem)?.Tag! ?? "ollama";
 
     private void Backend_Changed(object sender, SelectionChangedEventArgs e) => UpdatePanels();
+
+    private void ButtonSize_Changed(object sender, RoutedPropertyChangedEventArgs<double> e)
+    {
+        if (ButtonSizeValue != null) ButtonSizeValue.Text = ((int)Math.Round(e.NewValue)).ToString();
+    }
+
+    private void FontSize_Changed(object sender, RoutedPropertyChangedEventArgs<double> e)
+    {
+        if (FontSizeValue != null) FontSizeValue.Text = ((int)Math.Round(e.NewValue)).ToString();
+    }
 
     private void Hotkey_GotFocus(object sender, RoutedEventArgs e)
     {
@@ -126,6 +197,9 @@ public partial class SettingsWindow : Window
         s.DefaultTone = ((ToneBox.SelectedItem as ComboBoxItem)?.Content as string) ?? "Clean";
         s.DefaultCount = int.TryParse((CountBox.SelectedItem as ComboBoxItem)?.Content as string, out var n) ? n : 3;
         s.FloatingButton = FloatingButtonCheck.IsChecked == true;
+        s.AutoClose = AutoCloseCheck.IsChecked == true;
+        s.FloatingButtonSize = Math.Round(ButtonSizeSlider.Value);
+        s.FontSize = Math.Round(FontSizeSlider.Value);
         if (_hkKey != 0)
         {
             s.HotkeyModifiers = _hkMods;

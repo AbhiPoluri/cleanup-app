@@ -163,11 +163,11 @@ internal sealed class VariantCard
     private bool _selected;
     private bool _hover;
 
-    public VariantCard(int index, Theme t, Action<int> onSelect)
+    public VariantCard(int index, Theme t, Action<int> onSelect, double fontSize = 13)
     {
         _t = t;
 
-        _text = new TextBlock { FontSize = 13, Foreground = t.Text, TextWrapping = TextWrapping.Wrap };
+        _text = new TextBlock { FontSize = fontSize, Foreground = t.Text, TextWrapping = TextWrapping.Wrap };
         _styleLabel = new TextBlock
         {
             FontSize = 10,

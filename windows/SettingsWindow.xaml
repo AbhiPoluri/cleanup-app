@@ -120,8 +120,55 @@
     <CheckBox x:Name="FloatingButtonCheck" Margin="0,0,0,8"
               Content="Show ✦ button when I select text with the mouse"/>
 
+    <Grid Margin="0,0,0,8">
+      <Grid.ColumnDefinitions>
+        <ColumnDefinition Width="110"/>
+        <ColumnDefinition Width="*"/>
+        <ColumnDefinition Width="Auto"/>
+      </Grid.ColumnDefinitions>
+      <TextBlock Text="✦ button size" VerticalAlignment="Center"/>
+      <Slider x:Name="ButtonSizeSlider" Grid.Column="1" Minimum="22" Maximum="48"
+              TickFrequency="1" IsSnapToTickEnabled="True" VerticalAlignment="Center"
+              ValueChanged="ButtonSize_Changed"/>
+      <TextBlock x:Name="ButtonSizeValue" Grid.Column="2" MinWidth="34"
+                 TextAlignment="Right" VerticalAlignment="Center" Margin="8,0,0,0"/>
+    </Grid>
+
+    <Grid Margin="0,0,0,8">
+      <Grid.ColumnDefinitions>
+        <ColumnDefinition Width="110"/>
+        <ColumnDefinition Width="*"/>
+        <ColumnDefinition Width="Auto"/>
+      </Grid.ColumnDefinitions>
+      <TextBlock Text="Popup text size" VerticalAlignment="Center"/>
+      <Slider x:Name="FontSizeSlider" Grid.Column="1" Minimum="11" Maximum="18"
+              TickFrequency="1" IsSnapToTickEnabled="True" VerticalAlignment="Center"
+              ValueChanged="FontSize_Changed"/>
+      <TextBlock x:Name="FontSizeValue" Grid.Column="2" MinWidth="34"
+                 TextAlignment="Right" VerticalAlignment="Center" Margin="8,0,0,0"/>
+    </Grid>
+
+    <CheckBox x:Name="AutoCloseCheck" Margin="0,0,0,8"
+              Content="Auto-close when clicking away"/>
+
     <TextBlock Text="Trigger: select text anywhere, then Ctrl+Shift+E — or click the ✦ button."
                FontSize="11" Foreground="Gray" Margin="0,4,0,12"/>
+
+    <Separator Margin="0,4,0,8"/>
+
+    <Grid Margin="0,0,0,4">
+      <Grid.ColumnDefinitions>
+        <ColumnDefinition Width="110"/>
+        <ColumnDefinition Width="*"/>
+        <ColumnDefinition Width="Auto"/>
+      </Grid.ColumnDefinitions>
+      <TextBlock Text="Version" VerticalAlignment="Center"/>
+      <TextBlock x:Name="VersionLabel" Grid.Column="1" VerticalAlignment="Center"/>
+      <Button x:Name="UpdateBtn" Grid.Column="2" Content="Check for updates"
+              Padding="10,4" Click="Update_Click"/>
+    </Grid>
+    <TextBlock x:Name="UpdateStatus" FontSize="11" Foreground="Gray" Margin="0,0,0,12"
+               TextWrapping="Wrap" Visibility="Collapsed"/>
 
     <Button x:Name="SaveBtn" Content="Save" Width="90" HorizontalAlignment="Right"
             Padding="0,5" Click="Save_Click"/>

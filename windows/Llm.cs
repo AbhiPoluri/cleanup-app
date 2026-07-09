@@ -14,7 +14,10 @@ public static class Prompts
 {
     public const string System =
         "You are a text rewriting engine. Output exactly one rewritten message and nothing else — " +
-        "no quotes around it, no preamble, no labels, no bullet points, no multiple options, no explanations.";
+        "no quotes around it, no preamble, no labels, no multiple options, no explanations. " +
+        "Preserve the original formatting exactly: keep every line break, blank line, paragraph split, " +
+        "bullet or numbered list, indentation, and any markdown or special characters the writer used. " +
+        "Rewrite only the wording, never the layout.";
 
     public static string ToneInstruction(string tone) => tone switch
     {

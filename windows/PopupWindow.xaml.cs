@@ -36,13 +36,14 @@ public partial class PopupWindow : Window
     private TextBox? _customToneBox;
     private bool _refining;
     private bool _closeRequested;
-    private bool _pinned;
+    private bool _auto;
     private bool _diffOn;
-    private SolidColorBrush _diffRemovedBrush = new();
+    private DiffWindow? _popOut;
+    private readonly double _fontSize = Math.Clamp(Settings.Current.FontSize, 11, 18);
 
-    // pinned = don't dismiss on focus loss and follow new selections elsewhere.
-    // Never persisted — always starts unpinned.
-    public bool IsPinned => _pinned;
+    // auto mode = capture new selections made anywhere and feed them in (without
+    // stealing focus). Never persisted — always starts off.
+    public bool IsAutoMode => _auto;
 
     public PopupWindow(string original, IntPtr targetHwnd, ScreenUtil.NativePoint anchor)
     {
@@ -61,6 +62,10 @@ public partial class PopupWindow : Window
 
         ApplyTheme();
         BuildChips();
+        // content text size (item: font size adjuster) — chrome/labels stay fixed
+        DiffBox.FontSize = _fontSize;
+        RefineBox.FontSize = _fontSize;
+        RefinePlaceholder.FontSize = _fontSize;
         VariantSlider.Value = _count;
         ModelLabel.Text = Settings.Current.ModelLabel + " ▾";
         ModelChip.MouseLeftButtonUp += (_, _) => AppController.OpenSettings();
@@ -78,7 +83,15 @@ public partial class PopupWindow : Window
         RestyleDiffToggle();
         DiffPanel.Visibility = _diffOn ? Visibility.Visible : Visibility.Collapsed;
 
-        Deactivated += (_, _) => { if (!Program.TestMode && !_pinned) SafeClose(); };
+        // Click-away no longer closes by default. Only when the user opts into
+        // "Auto-close when clicking away" in Settings — and never while auto mode
+        // is on, nor while the pop-out diff window is open (clicking it would
+        // otherwise dismiss the popup out from under it).
+        Deactivated += (_, _) =>
+        {
+            if (!Program.TestMode && Settings.Current.AutoClose && !_auto && _popOut == null)
+                SafeClose();
+        };
         Closing += (_, _) => SaveSize();
         Closed += (_, _) => CancelAll();
         PreviewKeyDown += OnPreviewKeyDown;
@@ -123,20 +136,26 @@ public partial class PopupWindow : Window
         // mono selection highlight — no system blue
         DiffBox.SelectionBrush = _t.Muted;
         DiffBox.SelectionOpacity = 0.35;
-        // Text colour dimmed to ~0.45 for struck-out deletions (private brush)
-        _diffRemovedBrush = new SolidColorBrush(((SolidColorBrush)_t.Text).Color) { Opacity = 0.45 };
-        RestylePin();
+        // close button (quiet outline, like the other title-bar controls)
+        CloseBtn.Background = _t.Surface2;
+        CloseBtn.BorderBrush = _t.Line;
+        CloseLabel.Foreground = _t.Muted;
+        // pop-out button (quiet outline, mirrors the diff toggle)
+        PopOutBtn.Background = _t.Surface2;
+        PopOutBtn.BorderBrush = _t.Line;
+        PopOutLabel.Foreground = _t.Muted;
+        RestyleAuto();
         RestyleDiffToggle();
     }
 
-    private void RestylePin()
+    private void RestyleAuto()
     {
-        // Mono theme: pinned = filled/bordered/bold; unpinned = quiet outline.
-        PinBtn.Background = _pinned ? _t.Surface3 : _t.Surface2;
-        PinBtn.BorderBrush = _pinned ? _t.LineStrong : _t.Line;
-        PinLabel.Foreground = _pinned ? _t.Text : _t.Muted;
-        PinLabel.FontWeight = _pinned ? FontWeights.SemiBold : FontWeights.Normal;
-        PinLabel.Text = _pinned ? "✦ pinned" : "✦ pin";
+        // Mono theme: auto ON = filled/bordered/bold; OFF = quiet outline.
+        AutoBtn.Background = _auto ? _t.Surface3 : _t.Surface2;
+        AutoBtn.BorderBrush = _auto ? _t.LineStrong : _t.Line;
+        AutoLabel.Foreground = _auto ? _t.Text : _t.Muted;
+        AutoLabel.FontWeight = _auto ? FontWeights.SemiBold : FontWeights.Normal;
+        AutoLabel.Text = _auto ? "⟳ auto ●" : "⟳ auto";
     }
 
     // ---------- diff view ----------
@@ -209,6 +228,33 @@ public partial class PopupWindow : Window
         doc.Blocks.Add(para);
     }
 
+    // Selected variant's text, or null while it's still loading.
+    private string? CurrentResult() => _selected < _results.Length ? _results[_selected] : null;
+
+    // Push the current original→variant state to BOTH diff surfaces: the inline
+    // panel (guarded by _diffOn) and the pop-out window (if open). Called from
+    // every content change — selection, variant-done, refine-done, regenerate,
+    // and auto-mode capture — so the two stay in lockstep.
+    private void RefreshDiffs()
+    {
+        RenderDiff();
+        _popOut?.Update(_original, CurrentResult(), _fontSize);
+    }
+
+    // ---------- pop-out diff window ----------
+
+    private void PopOut_Click(object sender, MouseButtonEventArgs e)
+    {
+        e.Handled = true;
+        Anim.ScalePop(PopOutBtn, 1.12, 160);
+        if (_popOut != null) { _popOut.Activate(); return; }   // single instance → focus it
+        _popOut = new DiffWindow(_original, CurrentResult(), _fontSize);
+        _popOut.Closed += (_, _) => _popOut = null;
+        _popOut.Show();
+        _popOut.Activate();
+        Log.Write("diff popped out");
+    }
+
     private Run DimRun(string text) => new(text) { Foreground = _t.Faint };
 
     private Run MakeDiffRun(DiffSegment seg)
@@ -217,13 +263,14 @@ public partial class PopupWindow : Window
         switch (seg.Kind)
         {
             case DiffKind.Removed:
-                run.Foreground = _diffRemovedBrush;
+                run.Foreground = _t.DiffDelText;
+                run.Background = _t.DiffDelBg;
                 run.TextDecorations = TextDecorations.Strikethrough;
                 break;
             case DiffKind.Added:
-                run.Foreground = _t.Text;
+                run.Foreground = _t.DiffAddText;
+                run.Background = _t.DiffAddBg;
                 run.FontWeight = FontWeights.SemiBold;
-                run.Background = _t.Surface3;
                 break;
             default:   // Same
                 run.Foreground = _t.Text;
@@ -347,37 +394,44 @@ public partial class PopupWindow : Window
             if (ReferenceEquals(d, CardsScroll) || ReferenceEquals(d, RefineBorder) ||
                 ReferenceEquals(d, ChipsPanel) || ReferenceEquals(d, CopyBtn) ||
                 ReferenceEquals(d, ReplaceBtn) || ReferenceEquals(d, ModelChip) ||
-                ReferenceEquals(d, PinBtn) || ReferenceEquals(d, DiffPanel) ||
-                ReferenceEquals(d, DiffBtn))
+                ReferenceEquals(d, AutoBtn) || ReferenceEquals(d, DiffPanel) ||
+                ReferenceEquals(d, DiffBtn) || ReferenceEquals(d, PopOutBtn) ||
+                ReferenceEquals(d, CloseBtn))
                 return true;
         }
         return false;
     }
 
-    // ---------- pinned mode ----------
+    // ---------- auto mode ----------
 
-    private void Pin_Click(object sender, MouseButtonEventArgs e)
+    private void Auto_Click(object sender, MouseButtonEventArgs e)
     {
         e.Handled = true;
-        SetPinned(!_pinned);
+        SetAuto(!_auto);
     }
 
-    private void SetPinned(bool on)
+    private void SetAuto(bool on)
     {
-        if (on == _pinned) return;
-        _pinned = on;
-        RestylePin();
-        Anim.ScalePop(PinBtn, 1.12, 160);
-        Log.Write($"pinned mode {(on ? "ON" : "OFF")}");
+        if (on == _auto) return;
+        _auto = on;
+        RestyleAuto();
+        Anim.ScalePop(AutoBtn, 1.12, 160);
+        Log.Write($"auto mode {(on ? "ON" : "OFF")}");
+    }
+
+    private void Close_Click(object sender, MouseButtonEventArgs e)
+    {
+        e.Handled = true;
+        SafeClose();
     }
 
     // Called by the selection watcher when the user selects fresh text in another
-    // app while pinned. Must NOT steal focus (user is mid-selection elsewhere).
+    // app while auto mode is on. Must NOT steal focus (user is mid-selection).
     public void UpdateSource(string newText, IntPtr hwnd)
     {
         newText = newText.Trim();
         if (newText.Length == 0 || newText == _original.Trim()) return;
-        Log.Write($"pinned: new selection ({newText.Length} chars) — regenerating");
+        Log.Write($"auto: new selection ({newText.Length} chars) — regenerating");
         _original = newText;
         _targetHwnd = hwnd;
         // visibly acknowledge the caught selection: dip the card area, then the
@@ -523,7 +577,7 @@ public partial class PopupWindow : Window
         for (int i = 0; i < _count; i++)
         {
             int idx = i;
-            var card = new VariantCard(idx, _t, SelectCard);
+            var card = new VariantCard(idx, _t, SelectCard, _fontSize);
             card.EnterFresh();
             card.SetSelected(idx == 0, animate: false);
             _cards.Add(card);
@@ -541,7 +595,7 @@ public partial class PopupWindow : Window
         }
 
         // fresh selection has no result yet → diff shows its "waiting" state
-        RenderDiff();
+        RefreshDiffs();
     }
 
     private string? StyleLabel(int idx) =>
@@ -557,7 +611,7 @@ public partial class PopupWindow : Window
             Dispatcher.Invoke(() =>
             {
                 card.SetDone(text, StyleLabel(idx));
-                if (idx == _selected) RenderDiff();
+                if (idx == _selected) RefreshDiffs();
             });
         }
         catch (Exception ex)
@@ -595,7 +649,7 @@ public partial class PopupWindow : Window
             if (cts.Token.IsCancellationRequested) return;
             Dispatcher.Invoke(() =>
             {
-                if (text != null) { _results[idx] = text; card.SetDone(text, StyleLabel(idx)); if (idx == _selected) RenderDiff(); }
+                if (text != null) { _results[idx] = text; card.SetDone(text, StyleLabel(idx)); if (idx == _selected) RefreshDiffs(); }
                 else if (error != null) { _errors[idx] = error; card.SetError(error); }
                 _refining = false;
                 SetRefineBusy(false);
@@ -620,7 +674,7 @@ public partial class PopupWindow : Window
         _selected = i;
         for (int k = 0; k < _cards.Count; k++)
             _cards[k].SetSelected(k == i, animate: true);
-        RenderDiff();
+        RefreshDiffs();
     }
 
     // ---------- actions ----------
@@ -647,6 +701,11 @@ public partial class PopupWindow : Window
         if (_closeRequested) return;
         _closeRequested = true;
 
+        // tear down the pop-out diff window with the popup (its own Closed handler
+        // clears _popOut; Close is a no-op if it's already gone).
+        try { _popOut?.Close(); } catch { }
+        _popOut = null;
+
         var (s, _) = Anim.Transforms(Root);
         var fade = new DoubleAnimation(0, Anim.Ms(120)) { EasingFunction = Anim.EaseOut };
         fade.Completed += (_, _) => { try { Close(); } catch { } };
@@ -661,9 +720,11 @@ public partial class PopupWindow : Window
     {
         WireButton(CopyBtn, 0.9);
         WireButton(ReplaceBtn, 1.0);
-        WireButton(PinBtn, 1.0);
+        WireButton(AutoBtn, 1.0);
+        WireButton(CloseBtn, 0.85);
         WireButton(ModelChip, 0.85);
         WireButton(DiffBtn, 1.0);
+        WireButton(PopOutBtn, 1.0);
     }
 
     // Hover raises opacity; press gives a small scale dip. Additive to the
@@ -679,7 +740,7 @@ public partial class PopupWindow : Window
 
     private void OnPreviewKeyDown(object sender, KeyEventArgs e)
     {
-        if (e.Key == Key.Escape) { SetPinned(false); SafeClose(); e.Handled = true; return; }
+        if (e.Key == Key.Escape) { SetAuto(false); SafeClose(); e.Handled = true; return; }
         if ((Keyboard.Modifiers & ModifierKeys.Control) == 0) return;
         switch (e.Key)
         {

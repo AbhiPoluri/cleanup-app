@@ -18,16 +18,29 @@ jobs:
         with:
           dotnet-version: '8.0.x'
 
+      - name: Derive version
+        shell: pwsh
+        run: |
+          if ($env:GITHUB_REF_TYPE -eq 'tag') {
+            $v = $env:GITHUB_REF_NAME -replace '^v', ''
+          } else {
+            $v = '0.0.0-ci'
+          }
+          "VERSION=$v" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          Write-Host "Building version $v"
+
       - name: Publish self-contained exe
         run: >
           dotnet publish windows/Cleanup.csproj -c Release -r win-x64
           --self-contained true
           -p:PublishSingleFile=true
           -p:IncludeNativeLibrariesForSelfExtract=true
+          -p:Version=${{ env.VERSION }}
+          -p:InformationalVersion=${{ env.VERSION }}
           -o publish
 
       - name: Compile installer
-        run: '& "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" installer\cleanup.iss'
+        run: '& "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" /DAppVer=${{ env.VERSION }} installer\cleanup.iss'
 
       - uses: actions/upload-artifact@v4
         with:
