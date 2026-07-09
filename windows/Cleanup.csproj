@@ -8,6 +8,12 @@
     <ImplicitUsings>disable</ImplicitUsings>
     <AssemblyName>Cleanup</AssemblyName>
     <RootNamespace>Cleanup</RootNamespace>
+    <!-- per-monitor-v2 DPI awareness (see app.manifest). This is a WPF-first app,
+         so the manifest is the authoritative place to declare DPI awareness; the
+         WinForms analyzer (WFAC010) wrongly insists on the WinForms-only
+         ApplicationHighDpiMode path, so we suppress just that one warning. -->
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <NoWarn>$(NoWarn);WFAC010</NoWarn>
     <!-- allows compiling this project on macOS/Linux for CI/verification -->
     <EnableWindowsTargeting>true</EnableWindowsTargeting>
   </PropertyGroup>

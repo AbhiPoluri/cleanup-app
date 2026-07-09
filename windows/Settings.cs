@@ -16,6 +16,9 @@ public class Settings
     public string DefaultTone { get; set; } = "Clean";
     public int DefaultCount { get; set; } = 3;
     public bool FloatingButton { get; set; } = true;
+    // last popup size (DIPs) — restored on next open; clamped to the mins below
+    public double PopupWidth { get; set; } = 640;
+    public double PopupHeight { get; set; } = 540;
     // Win32 MOD_* flags happen to match WPF ModifierKeys values (Alt=1, Ctrl=2, Shift=4, Win=8)
     public uint HotkeyModifiers { get; set; } = 0x2 | 0x4; // Ctrl+Shift
     public uint HotkeyKey { get; set; } = 0x45;            // E

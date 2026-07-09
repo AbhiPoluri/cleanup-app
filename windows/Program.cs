@@ -87,7 +87,11 @@ public sealed class AppController : IDisposable
         _tray.ContextMenuStrip = menu;
 
         _hotkey = new HotkeyWindow(OnHotkey);
-        _watcher = new SelectionWatcher(OnHotkey, () => _popup != null);
+        _watcher = new SelectionWatcher(
+            OnHotkey,
+            () => _popup != null,
+            () => _popup?.IsPinned == true,
+            (text, hwnd) => _popup?.UpdateSource(text, hwnd));
     }
 
     public void RefreshHotkey()
@@ -100,23 +104,28 @@ public sealed class AppController : IDisposable
     {
         Log.Write("trigger fired");
         if (_popup != null) return;
+        // cursor at trigger time — the popup opens on this monitor near this point
+        var anchor = ScreenUtil.CursorPos();
         var (text, hwnd) = await Capture.GrabSelection();
         if (text == null)
         {
             System.Media.SystemSounds.Beep.Play();
             return;
         }
-        ShowPopup(text, hwnd);
+        ShowPopup(text, hwnd, anchor);
     }
 
-    public void ShowPopup(string text, IntPtr targetHwnd)
+    public void ShowPopup(string text, IntPtr targetHwnd) =>
+        ShowPopup(text, targetHwnd, ScreenUtil.CursorPos());
+
+    public void ShowPopup(string text, IntPtr targetHwnd, ScreenUtil.NativePoint anchor)
     {
         _popup?.SafeClose();
-        _popup = new PopupWindow(text, targetHwnd);
+        _popup = new PopupWindow(text, targetHwnd, anchor);
         _popup.Closed += (_, _) => _popup = null;
         _popup.Show();
         _popup.Activate();
-        Log.Write($"popup shown at {_popup.Left:F0},{_popup.Top:F0} ({text.Length} chars)");
+        Log.Write($"popup shown ({text.Length} chars)");
     }
 
     public static void OpenSettings()
