@@ -38,6 +38,10 @@ public partial class PopupWindow : Window
     private bool _closeRequested;
     private bool _auto;
     private bool _diffOn;
+    // batch timing (all touched on the UI thread only)
+    private System.Diagnostics.Stopwatch? _batchSw;
+    private int _batchLanded;
+    private bool _batchFirstLogged;
     private DiffWindow? _popOut;
     private readonly double _fontSize = Math.Clamp(Settings.Current.FontSize, 11, 18);
 
@@ -574,6 +578,13 @@ public partial class PopupWindow : Window
         _errors = new string?[_count];
         _selected = 0;
 
+        // batch wall-clock: start now, one line per landed variant advances it,
+        // completion line when the last variant lands.
+        _batchSw = System.Diagnostics.Stopwatch.StartNew();
+        _batchLanded = 0;
+        _batchFirstLogged = false;
+        Log.Write($"batch start count={_count} backend={Settings.Current.Backend} textlen={_original.Length}");
+
         for (int i = 0; i < _count; i++)
         {
             int idx = i;
@@ -605,20 +616,43 @@ public partial class PopupWindow : Window
     {
         try
         {
-            var text = await Llm.Complete(Prompts.System, Prompts.Variant(_original, _tone, idx), ct);
+            var text = await Llm.Complete(Prompts.System, Prompts.Variant(_original, _tone, idx), ct, idx);
             if (ct.IsCancellationRequested) return;
             _results[idx] = text;
-            Dispatcher.Invoke(() =>
+            // InvokeAsync (not blocking Invoke) so this LLM-task thread isn't parked
+            // waiting on the UI thread while other variants are still streaming in.
+            _ = Dispatcher.InvokeAsync(() =>
             {
                 card.SetDone(text, StyleLabel(idx));
                 if (idx == _selected) RefreshDiffs();
+                OnVariantLanded(ct);
             });
         }
         catch (Exception ex)
         {
             if (ct.IsCancellationRequested) return;
             _errors[idx] = ex.Message;
-            Dispatcher.Invoke(() => card.SetError(ex.Message));
+            _ = Dispatcher.InvokeAsync(() => { card.SetError(ex.Message); OnVariantLanded(ct); });
+        }
+    }
+
+    // UI-thread only: advances the batch counters. Logs the perceived "first
+    // variant done" latency once, and the batch wall-clock when the last lands.
+    // Guarded by the batch's own token so a superseded batch (tone change,
+    // regenerate, auto-mode recapture) can't log against the new one.
+    private void OnVariantLanded(CancellationToken ct)
+    {
+        if (ct.IsCancellationRequested || _batchSw == null) return;
+        _batchLanded++;
+        if (!_batchFirstLogged)
+        {
+            _batchFirstLogged = true;
+            Log.Write($"popup: first-variant-done {_batchSw.ElapsedMilliseconds}ms");
+        }
+        if (_batchLanded >= _count)
+        {
+            Log.Write($"batch done count={_count} wall={_batchSw.ElapsedMilliseconds}ms");
+            _batchSw.Stop();
         }
     }
 
@@ -643,7 +677,7 @@ public partial class PopupWindow : Window
             string? text = null, error = null;
             try
             {
-                text = await Llm.Complete(Prompts.System, Prompts.Refine(current, instruction), cts.Token);
+                text = await Llm.Complete(Prompts.System, Prompts.Refine(current, instruction), cts.Token, idx);
             }
             catch (Exception ex) { error = ex.Message; }
             if (cts.Token.IsCancellationRequested) return;

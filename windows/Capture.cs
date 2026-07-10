@@ -1,4 +1,5 @@
 using System;
+using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Threading.Tasks;
 using System.Windows;
@@ -52,14 +53,25 @@ public static class Capture
         var hwnd = GetForegroundWindow();
         var saved = TryGetText();
         var seqBefore = GetClipboardSequenceNumber();
+        var sw = Stopwatch.StartNew();
         SendCtrlCombo(VK_C);
-        await Task.Delay(300);
-        // the sequence number bumps iff the copy actually happened — content
-        // comparison false-negatives when the clipboard already held the selection
-        bool copied = GetClipboardSequenceNumber() != seqBefore;
+        // Poll the clipboard sequence number instead of one fixed 300ms sleep: the
+        // number bumps the instant the target app finishes SetClipboardData, so we
+        // return as soon as the copy lands (often ~25-75ms) instead of always
+        // waiting the worst case. The sequence-number check is the same correctness
+        // guard as before (content comparison false-negatives when the clipboard
+        // already held the selection); 300ms stays the ceiling for slow apps.
+        bool copied = false;
+        int waited = 0;
+        while (waited < 300)
+        {
+            await Task.Delay(25);
+            waited += 25;
+            if (GetClipboardSequenceNumber() != seqBefore) { copied = true; break; }
+        }
         var captured = TryGetText();
         TrySetText(saved); // put the user's clipboard back immediately
-        Log.Write($"capture: copied={copied} len={captured?.Length ?? 0}");
+        Log.Write($"capture: copied={copied} len={captured?.Length ?? 0} wait={waited}ms total={sw.ElapsedMilliseconds}ms");
         if (!copied || string.IsNullOrWhiteSpace(captured))
             return (null, hwnd);
         return (captured, hwnd);

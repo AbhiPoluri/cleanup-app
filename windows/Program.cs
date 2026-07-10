@@ -108,15 +108,23 @@ public sealed class AppController : IDisposable
     {
         Log.Write("trigger fired");
         if (_popup != null) return;
+        // Warm DNS+TCP+TLS to the active remote backend now, in parallel with the
+        // capture below, so the first variant skips the cold handshake. No-op for
+        // local Ollama / when the pool is already warm.
+        _ = Llm.Prewarm();
+        var sw = System.Diagnostics.Stopwatch.StartNew();
         // cursor at trigger time — the popup opens on this monitor near this point
         var anchor = ScreenUtil.CursorPos();
         var (text, hwnd) = await Capture.GrabSelection();
+        Log.Write($"trigger→capture-complete {sw.ElapsedMilliseconds}ms");
         if (text == null)
         {
             System.Media.SystemSounds.Beep.Play();
             return;
         }
+        sw.Restart();
         ShowPopup(text, hwnd, anchor);
+        Log.Write($"capture→popup-shown {sw.ElapsedMilliseconds}ms");
     }
 
     public void ShowPopup(string text, IntPtr targetHwnd) =>
