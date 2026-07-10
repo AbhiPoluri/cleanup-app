@@ -116,9 +116,12 @@ enum LLM {
 
     private static func openAI(system: String, user: String) async throws -> String {
         let d = defaults()
-        let base = (d.string(forKey: Keys.apiBase) ?? "https://api.openai.com")
+        var base = (d.string(forKey: Keys.apiBase) ?? "https://api.openai.com")
             .trimmingCharacters(in: CharacterSet(charactersIn: "/"))
-        guard let url = URL(string: base + "/v1/chat/completions") else { throw LLMError.badResponse("Bad API base URL") }
+        // accept bases with or without a trailing /v1 (OpenRouter documents
+        // https://openrouter.ai/api/v1, OpenAI documents https://api.openai.com)
+        if !base.lowercased().hasSuffix("/v1") { base += "/v1" }
+        guard let url = URL(string: base + "/chat/completions") else { throw LLMError.badResponse("Bad API base URL") }
         var req = URLRequest(url: url)
         req.httpMethod = "POST"
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
@@ -134,7 +137,16 @@ enum LLM {
         req.httpBody = try JSONSerialization.data(withJSONObject: body)
         let (data, resp) = try await URLSession.shared.data(for: req)
         guard let http = resp as? HTTPURLResponse, http.statusCode == 200 else {
-            throw LLMError.badResponse("API HTTP \((resp as? HTTPURLResponse)?.statusCode ?? 0)")
+            let code = (resp as? HTTPURLResponse)?.statusCode ?? 0
+            // surface the server's error message, not just the status code
+            var detail = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            if let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+               let err = obj["error"] as? [String: Any],
+               let msg = err["message"] as? String {
+                detail = msg
+            }
+            if detail.count > 200 { detail = String(detail.prefix(200)) + "…" }
+            throw LLMError.badResponse("API HTTP \(code): \(detail.isEmpty ? "no response body" : detail)")
         }
         guard let obj = try JSONSerialization.jsonObject(with: data) as? [String: Any],
               let choices = obj["choices"] as? [[String: Any]],

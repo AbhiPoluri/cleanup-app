@@ -96,15 +96,45 @@ public static class Llm
                 new { role = "user", content = user },
             },
         });
-        using var req = new HttpRequestMessage(HttpMethod.Post,
-            s.ApiBase.TrimEnd('/') + "/v1/chat/completions")
+        // Accept bases with or without a trailing /v1 (OpenAI docs say
+        // https://api.openai.com, OpenRouter docs say https://openrouter.ai/api/v1)
+        var baseUrl = s.ApiBase.TrimEnd('/');
+        var url = baseUrl.EndsWith("/v1", StringComparison.OrdinalIgnoreCase)
+            ? baseUrl + "/chat/completions"
+            : baseUrl + "/v1/chat/completions";
+        using var req = new HttpRequestMessage(HttpMethod.Post, url)
         { Content = new StringContent(body, Encoding.UTF8, "application/json") };
         req.Headers.Authorization = new AuthenticationHeaderValue("Bearer", s.ApiKey);
         using var resp = await Http.SendAsync(req, ct);
-        if (!resp.IsSuccessStatusCode) throw new Exception($"API HTTP {(int)resp.StatusCode}");
+        if (!resp.IsSuccessStatusCode)
+        {
+            var errBody = await resp.Content.ReadAsStringAsync(ct);
+            throw new Exception($"API HTTP {(int)resp.StatusCode}: {ExtractApiError(errBody)}");
+        }
         using var doc = JsonDocument.Parse(await resp.Content.ReadAsStringAsync(ct));
         return doc.RootElement.GetProperty("choices")[0].GetProperty("message").GetProperty("content").GetString()
                ?? throw new Exception("API: empty response");
+    }
+
+    // Pull the human-readable message out of an OpenAI-style error payload
+    // ({"error":{"message":...}}); fall back to the raw (truncated) body.
+    private static string ExtractApiError(string body)
+    {
+        try
+        {
+            using var doc = JsonDocument.Parse(body);
+            if (doc.RootElement.TryGetProperty("error", out var err))
+            {
+                if (err.ValueKind == JsonValueKind.Object &&
+                    err.TryGetProperty("message", out var msg) && msg.ValueKind == JsonValueKind.String)
+                    return msg.GetString()!;
+                if (err.ValueKind == JsonValueKind.String)
+                    return err.GetString()!;
+            }
+        }
+        catch { }
+        var trimmed = body.Trim();
+        return trimmed.Length > 200 ? trimmed[..200] + "…" : (trimmed.Length > 0 ? trimmed : "no response body");
     }
 
     // ChatGPT subscription via Codex CLI login (%USERPROFILE%\.codex\auth.json).
