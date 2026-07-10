@@ -14,9 +14,12 @@ enum Keys {
     static let apiModel = "apiModel"
     static let defaultTone = "defaultTone"
     static let defaultCount = "defaultCount"
+    static let autoReplace = "autoReplace"        // hands-free: paste first variant, no popup
 }
 
 func defaults() -> UserDefaults { UserDefaults.standard }
+
+func logLine(_ msg: String) { NSLog("[Cleanup] %@", msg) }
 
 func registerDefaults() {
     defaults().register(defaults: [
@@ -29,6 +32,7 @@ func registerDefaults() {
         Keys.chatgptEffort: "low",
         Keys.defaultTone: "Clean",
         Keys.defaultCount: 3,
+        Keys.autoReplace: false,
     ])
 }
 
@@ -684,6 +688,31 @@ final class PopupPanel: NSPanel {
     }
 }
 
+// MARK: - Hands-free progress chip
+
+// Small pulsing ✦ shown near the cursor while an auto-replace generation runs.
+// Lives in a borderless, non-activating floating panel so it never steals focus
+// (which would drop the source app's selection). Pulses opacity only (Mono-legal).
+struct ProgressChip: View {
+    @Environment(\.colorScheme) private var scheme
+    @State private var pulse = false
+    private var pal: Pal { Pal.of(dark: scheme == .dark) }
+
+    var body: some View {
+        ZStack {
+            Circle().fill(pal.surface)
+            Circle().stroke(pal.lineStrong, lineWidth: 1)
+            Text("✦")
+                .font(.system(size: 13))
+                .foregroundColor(pal.accent)
+                .opacity(pulse ? 1.0 : 0.35)
+                .animation(.easeInOut(duration: 0.6).repeatForever(autoreverses: true), value: pulse)
+        }
+        .frame(width: 30, height: 30)
+        .onAppear { pulse = true }
+    }
+}
+
 // MARK: - Settings
 
 enum CodexAuthStatus {
@@ -793,6 +822,7 @@ struct SettingsView: View {
     @AppStorage(Keys.chatgptEffort) private var chatgptEffort = "low"
     @AppStorage(Keys.defaultTone) private var defaultTone = "Clean"
     @AppStorage(Keys.defaultCount) private var defaultCount = 3
+    @AppStorage(Keys.autoReplace) private var autoReplace = false
     @State private var ollamaModels: [String] = []
     private let chatgptModels = ModelCatalog.chatgpt
 
@@ -834,6 +864,7 @@ struct SettingsView: View {
                 ForEach(["Clean", "Professional", "Casual", "Blunt"], id: \.self) { Text($0).tag($0) }
             }
             Stepper("Default variants: \(defaultCount)", value: $defaultCount, in: 1...5)
+            Toggle("Auto-replace: instantly rewrite selection with the first variant, no popup", isOn: $autoReplace)
             Text("Trigger: select text anywhere, then ⌃⌘E — or right-click → Clean Up Message.")
                 .font(.system(size: 11)).foregroundColor(.secondary)
         }
@@ -846,7 +877,7 @@ struct SettingsView: View {
 // MARK: - App delegate
 
 @MainActor
-final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
+final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenuDelegate {
     static var shared: AppDelegate!
 
     private var statusItem: NSStatusItem!
@@ -855,6 +886,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private var settingsWindow: NSWindow?
     private var targetApp: NSRunningApplication?
     private var closingProgrammatically = false
+    private var autoReplaceMenuItem: NSMenuItem?
+    // in-flight hands-free generation (nil when idle) + its progress chip panel
+    private var autoTask: Task<Void, Never>?
+    private var progressPanel: NSPanel?
 
     func applicationShouldTerminateAfterLastWindowClosed(_ app: NSApplication) -> Bool { false }
 
@@ -888,9 +923,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         let settings = NSMenuItem(title: "Settings…", action: #selector(openSettingsAction), keyEquivalent: ",")
         settings.target = self
         menu.addItem(settings)
+        let autoReplace = NSMenuItem(title: "Auto-replace first variant", action: #selector(toggleAutoReplace(_:)), keyEquivalent: "")
+        autoReplace.target = self
+        autoReplace.state = defaults().bool(forKey: Keys.autoReplace) ? .on : .off
+        menu.addItem(autoReplace)
+        autoReplaceMenuItem = autoReplace
         menu.addItem(NSMenuItem.separator())
         menu.addItem(NSMenuItem(title: "Quit Cleanup", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q"))
+        menu.delegate = self   // refresh the checkmark from defaults on open (Settings can flip it)
         statusItem.menu = menu
+    }
+
+    // reflect a change made in the Settings window when the menu is opened
+    func menuWillOpen(_ menu: NSMenu) {
+        autoReplaceMenuItem?.state = defaults().bool(forKey: Keys.autoReplace) ? .on : .off
+    }
+
+    @objc private func toggleAutoReplace(_ sender: NSMenuItem) {
+        let newVal = !defaults().bool(forKey: Keys.autoReplace)
+        defaults().set(newVal, forKey: Keys.autoReplace)
+        sender.state = newVal ? .on : .off
+        logLine("autoreplace toggled \(newVal ? "ON" : "OFF") (menu)")
     }
 
     @objc private func testPopup() {
@@ -927,13 +980,33 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     @objc func cleanUpMessage(_ pboard: NSPasteboard, userData: String, error: AutoreleasingUnsafeMutablePointer<NSString>) {
         guard let text = pboard.string(forType: .string),
               !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
-        DispatchQueue.main.async { self.showPopup(text: text) }
+        DispatchQueue.main.async {
+            self.targetApp = NSWorkspace.shared.frontmostApplication
+            if defaults().bool(forKey: Keys.autoReplace) {
+                self.autoReplace(text: text)
+            } else {
+                self.showPopup(text: text)
+            }
+        }
     }
 
     // MARK: selection capture (simulated ⌘C, clipboard restored)
 
     private func captureSelectionAndShow() {
-        guard panel == nil else { return }
+        // A second trigger while a hands-free generation is in flight cancels it.
+        if let t = autoTask {
+            t.cancel()
+            autoTask = nil
+            hideProgressChip()
+            logLine("autoreplace: cancelled by second trigger")
+            return
+        }
+        let auto = defaults().bool(forKey: Keys.autoReplace)
+        // Hands-free bypasses the popup; close a stray one so they don't fight over
+        // the clipboard. Without auto, an open popup swallows the trigger as before.
+        if panel != nil {
+            if auto { closePopup() } else { return }
+        }
         targetApp = NSWorkspace.shared.frontmostApplication
         let pb = NSPasteboard.general
         let saved = pb.string(forType: .string)
@@ -950,7 +1023,94 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
                 NSSound.beep()
                 return
             }
-            self.showPopup(text: text)
+            if auto {
+                self.autoReplace(text: text)
+            } else {
+                self.showPopup(text: text)
+            }
+        }
+    }
+
+    // MARK: hands-free auto-replace
+
+    // Generate ONE balanced variant (no popup, no streaming) and paste it straight
+    // back over the selection. On any failure (LLM error / empty result) fall back
+    // to the normal popup, which surfaces errors well.
+    private func autoReplace(text: String) {
+        let start = Date()
+        let target = targetApp
+        let tone = defaults().string(forKey: Keys.defaultTone) ?? "Clean"
+        showProgressChip()
+        logLine("autoreplace: start len=\(text.count) backend=\(defaults().string(forKey: Keys.backend) ?? "ollama")")
+        autoTask = Task { [weak self] in
+            guard let self else { return }
+            do {
+                let out = try await LLM.complete(system: Prompts.system,
+                                                 user: Prompts.variant(text: text, tone: tone, index: 0))
+                if Task.isCancelled { return }
+                let trimmed = out.trimmingCharacters(in: .whitespacesAndNewlines)
+                if trimmed.isEmpty {
+                    self.autoReplaceFailed(text: text, reason: "empty result")
+                    return
+                }
+                self.hideProgressChip()
+                self.autoTask = nil
+                self.pasteBack(text: out, target: target)
+                logLine("autoreplace: done total=\(Int(Date().timeIntervalSince(start) * 1000))ms")
+            } catch {
+                if Task.isCancelled { return }
+                self.autoReplaceFailed(text: text, reason: error.localizedDescription)
+            }
+        }
+    }
+
+    private func autoReplaceFailed(text: String, reason: String) {
+        hideProgressChip()
+        autoTask = nil
+        logLine("autoreplace: failed — \(reason) (falling back to popup)")
+        showPopup(text: text)
+    }
+
+    private func showProgressChip() {
+        hideProgressChip()
+        let size: CGFloat = 30
+        let p = NSPanel(contentRect: NSRect(x: 0, y: 0, width: size, height: size),
+                        styleMask: [.borderless, .nonactivatingPanel],
+                        backing: .buffered, defer: false)
+        p.isOpaque = false
+        p.backgroundColor = .clear
+        p.hasShadow = true
+        p.level = .floating
+        p.isReleasedWhenClosed = false
+        p.ignoresMouseEvents = true
+        p.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
+        p.contentView = NSHostingView(rootView: ProgressChip())
+        let mouse = NSEvent.mouseLocation
+        p.setFrameOrigin(NSPoint(x: mouse.x + 12, y: mouse.y - 40))
+        p.orderFrontRegardless()   // show without stealing focus (keeps the selection)
+        progressPanel = p
+    }
+
+    private func hideProgressChip() {
+        progressPanel?.orderOut(nil)
+        progressPanel = nil
+    }
+
+    // Refocus the target app, swap in our text, ⌘V, then restore the clipboard.
+    private func pasteBack(text: String, target: NSRunningApplication?) {
+        target?.activate(options: [])
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
+            let pb = NSPasteboard.general
+            let saved = pb.string(forType: .string)
+            pb.clearContents()
+            pb.setString(text, forType: .string)
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.10) {
+                self.keystroke("v")
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.60) {
+                    pb.clearContents()
+                    if let saved = saved { pb.setString(saved, forType: .string) }
+                }
+            }
         }
     }
 
@@ -1030,20 +1190,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         guard let text = session?.selectedText else { NSSound.beep(); return }
         let target = targetApp
         closePopup()
-        target?.activate(options: [])
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
-            let pb = NSPasteboard.general
-            let saved = pb.string(forType: .string)
-            pb.clearContents()
-            pb.setString(text, forType: .string)
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.10) {
-                self.keystroke("v")
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.60) {
-                    pb.clearContents()
-                    if let saved = saved { pb.setString(saved, forType: .string) }
-                }
-            }
-        }
+        pasteBack(text: text, target: target)
     }
 
     // MARK: settings window

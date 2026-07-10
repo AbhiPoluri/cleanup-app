@@ -132,6 +132,9 @@
     <CheckBox x:Name="FloatingButtonCheck" Margin="0,0,0,8"
               Content="Show ✦ button when I select text with the mouse"/>
 
+    <CheckBox x:Name="AutoReplaceCheck" Margin="0,0,0,8"
+              Content="Auto-replace: instantly rewrite selection with the first variant, no popup"/>
+
     <Grid Margin="0,0,0,8">
       <Grid.ColumnDefinitions>
         <ColumnDefinition Width="110"/>

@@ -305,3 +305,91 @@ public sealed class FloatingButtonWindow : Window
         return screenX >= r.Left && screenX <= r.Right && screenY >= r.Top && screenY <= r.Bottom;
     }
 }
+
+// Hands-free progress indicator: a small ✦ chip that pulses near the cursor while
+// an auto-replace generation is in flight. Same NOACTIVATE + topmost + DPI-scaled
+// SetWindowPos device-px pattern as FloatingButtonWindow so it never steals focus
+// (which would kill the source app's selection). The pulse animates opacity only
+// (Mono-legal), like LoadingDots.
+public sealed class ProgressChipWindow : Window
+{
+    private const int GWL_EXSTYLE = -20;
+    private const int WS_EX_NOACTIVATE = 0x08000000, WS_EX_TOOLWINDOW = 0x00000080;
+
+    [DllImport("user32.dll")] private static extern int GetWindowLong(IntPtr hWnd, int nIndex);
+    [DllImport("user32.dll")] private static extern int SetWindowLong(IntPtr hWnd, int nIndex, int dwNewLong);
+    [DllImport("user32.dll")] private static extern bool SetWindowPos(IntPtr hWnd, IntPtr hWndInsertAfter, int x, int y, int cx, int cy, uint flags);
+
+    private static readonly IntPtr HWND_TOPMOST = new(-1);
+    private const uint SWP_NOACTIVATE = 0x0010, SWP_SHOWWINDOW = 0x0040;
+
+    private const double Dip = 30;   // fixed logical size — matches the ✦ button default
+    private readonly TextBlock _glyph;
+
+    public ProgressChipWindow()
+    {
+        var t = Theme.Detect();
+        Width = Dip; Height = Dip;
+        WindowStyle = WindowStyle.None;
+        AllowsTransparency = true;
+        Background = System.Windows.Media.Brushes.Transparent;
+        Topmost = true;
+        ShowInTaskbar = false;
+        ShowActivated = false;
+        ResizeMode = ResizeMode.NoResize;
+
+        _glyph = new TextBlock
+        {
+            Text = "✦",
+            FontSize = Dip * 0.43,
+            Foreground = t.Accent,
+            HorizontalAlignment = HorizontalAlignment.Center,
+            VerticalAlignment = VerticalAlignment.Center,
+        };
+        Content = new Border
+        {
+            CornerRadius = new CornerRadius(Dip / 2),
+            Background = t.Surface,
+            BorderBrush = t.LineStrong,
+            BorderThickness = new Thickness(1),
+            Child = _glyph,
+        };
+    }
+
+    protected override void OnSourceInitialized(EventArgs e)
+    {
+        base.OnSourceInitialized(e);
+        // never steal focus — the source app must keep its selection active
+        var h = new WindowInteropHelper(this).Handle;
+        SetWindowLong(h, GWL_EXSTYLE, GetWindowLong(h, GWL_EXSTYLE) | WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW);
+    }
+
+    public void ShowNear(int screenX, int screenY)
+    {
+        if (!IsVisible) Show();   // realize the HWND
+        var h = new WindowInteropHelper(this).Handle;
+        uint dpi = ScreenUtil.DpiForPoint(screenX, screenY);
+        double s = dpi / 96.0;
+        int size = (int)Math.Round(Dip * s);
+        int x = screenX + (int)Math.Round(16 * s);
+        int y = screenY - (int)Math.Round(46 * s);
+        if (y < (int)Math.Round(4 * s)) y = screenY + (int)Math.Round(20 * s);
+        SetWindowPos(h, HWND_TOPMOST, x, y, size, size, SWP_NOACTIVATE | SWP_SHOWWINDOW);
+
+        // pulse the glyph opacity forever until hidden (opacity only → Mono-legal)
+        var pulse = new DoubleAnimation(0.9, 0.3, Anim.Ms(600))
+        {
+            AutoReverse = true,
+            RepeatBehavior = RepeatBehavior.Forever,
+            EasingFunction = Anim.EaseInOut,
+        };
+        _glyph.BeginAnimation(UIElement.OpacityProperty, pulse);
+    }
+
+    public void HideChip()
+    {
+        _glyph.BeginAnimation(UIElement.OpacityProperty, null);   // detaches the clock
+        _glyph.Opacity = 1;
+        if (IsVisible) Hide();
+    }
+}

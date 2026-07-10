@@ -19,6 +19,9 @@ public class Settings
     public string DefaultTone { get; set; } = "Clean";
     public int DefaultCount { get; set; } = 3;
     public bool FloatingButton { get; set; } = true;
+    // hands-free auto-replace: on trigger, generate ONE variant and paste it
+    // straight back over the selection — no popup. OFF by default.
+    public bool AutoReplace { get; set; } = false;
     // inline diff panel toggle — persists across popup opens
     public bool DiffView { get; set; } = false;
     // click-away dismissal — OFF by default (popup stays open until Esc / ✕ / Copy / Replace)

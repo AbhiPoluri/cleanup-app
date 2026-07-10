@@ -34,6 +34,7 @@ public partial class SettingsWindow : Window
         SelectByContent(ToneBox, s.DefaultTone);
         SelectByContent(CountBox, s.DefaultCount.ToString());
         FloatingButtonCheck.IsChecked = s.FloatingButton;
+        AutoReplaceCheck.IsChecked = s.AutoReplace;
         AutoCloseCheck.IsChecked = s.AutoClose;
         ButtonSizeSlider.Value = Math.Clamp(s.FloatingButtonSize, 22, 48);
         FontSizeSlider.Value = Math.Clamp(s.FontSize, 11, 18);
@@ -202,6 +203,7 @@ public partial class SettingsWindow : Window
         s.DefaultTone = ((ToneBox.SelectedItem as ComboBoxItem)?.Content as string) ?? "Clean";
         s.DefaultCount = int.TryParse((CountBox.SelectedItem as ComboBoxItem)?.Content as string, out var n) ? n : 3;
         s.FloatingButton = FloatingButtonCheck.IsChecked == true;
+        s.AutoReplace = AutoReplaceCheck.IsChecked == true;
         s.AutoClose = AutoCloseCheck.IsChecked == true;
         s.FloatingButtonSize = Math.Round(ButtonSizeSlider.Value);
         s.FontSize = Math.Round(FontSizeSlider.Value);
@@ -213,6 +215,7 @@ public partial class SettingsWindow : Window
         }
         s.Save();
         AppController.Current?.RefreshHotkey();
+        AppController.Current?.SyncAutoReplaceMenu();
         Close();
     }
 }

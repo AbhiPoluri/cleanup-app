@@ -1,6 +1,8 @@
 using System;
 using System.Drawing;
 using System.Linq;
+using System.Threading;
+using System.Threading.Tasks;
 using WF = System.Windows.Forms;
 
 namespace Cleanup;
@@ -54,6 +56,10 @@ public sealed class AppController : IDisposable
     private readonly HotkeyWindow _hotkey;
     private readonly SelectionWatcher _watcher;
     private PopupWindow? _popup;
+    private WF.ToolStripMenuItem? _autoReplaceItem;
+    // in-flight hands-free generation (null when idle) + its progress chip
+    private CancellationTokenSource? _autoCts;
+    private ProgressChipWindow? _autoChip;
 
     public static AppController? Current { get; private set; }
 
@@ -69,6 +75,20 @@ public sealed class AppController : IDisposable
         var menu = new WF.ContextMenuStrip();
         menu.Items.Add("Test Popup", null, (_, _) => ShowPopup(Program.SampleText, IntPtr.Zero));
         menu.Items.Add("Settings…", null, (_, _) => OpenSettings());
+        var autoReplaceItem = new WF.ToolStripMenuItem("Auto-replace first variant")
+        {
+            CheckOnClick = true,
+            Checked = Settings.Current.AutoReplace,
+        };
+        autoReplaceItem.CheckedChanged += (_, _) =>
+        {
+            if (Settings.Current.AutoReplace == autoReplaceItem.Checked) return;
+            Settings.Current.AutoReplace = autoReplaceItem.Checked;
+            Settings.Current.Save();
+            Log.Write($"autoreplace toggled {(autoReplaceItem.Checked ? "ON" : "OFF")} (tray)");
+        };
+        menu.Items.Add(autoReplaceItem);
+        _autoReplaceItem = autoReplaceItem;
         menu.Items.Add("Check for Updates…", null, (_, _) => OpenSettings());
         menu.Items.Add("Test ✦ Button", null, (_, _) =>
         {
@@ -101,12 +121,33 @@ public sealed class AppController : IDisposable
         _tray.Text = TrayTip();
     }
 
+    // keep the tray checkmark in sync after the Settings window saves
+    public void SyncAutoReplaceMenu()
+    {
+        if (_autoReplaceItem != null) _autoReplaceItem.Checked = Settings.Current.AutoReplace;
+    }
+
     private static string TrayTip() =>
         $"Cleanup {Updater.DisplayVersion} — {Settings.Current.HotkeyDisplay} on selected text";
 
     private async void OnHotkey()
     {
         Log.Write("trigger fired");
+        // A second trigger while a hands-free generation is in flight cancels it.
+        if (_autoCts != null)
+        {
+            Log.Write("autoreplace: cancelled by second trigger");
+            _autoCts.Cancel();
+            HideAutoChip();
+            return;
+        }
+        // Hands-free path: bypass the popup entirely.
+        if (Settings.Current.AutoReplace)
+        {
+            _popup?.SafeClose();   // don't let a stray popup fight over the clipboard
+            await AutoReplace();
+            return;
+        }
         if (_popup != null) return;
         // Warm DNS+TCP+TLS to the active remote backend now, in parallel with the
         // capture below, so the first variant skips the cold handshake. No-op for
@@ -126,6 +167,79 @@ public sealed class AppController : IDisposable
         ShowPopup(text, hwnd, anchor);
         Log.Write($"capture→popup-shown {sw.ElapsedMilliseconds}ms");
     }
+
+    // Hands-free: capture → generate ONE balanced variant (no popup, no streaming)
+    // → paste straight back over the selection. On any failure (LLM error, empty
+    // result) fall back to the normal popup, which surfaces errors well. An empty
+    // capture just beeps (there's nothing to rewrite or fall back to).
+    private async Task AutoReplace()
+    {
+        var cts = new CancellationTokenSource();
+        _autoCts = cts;
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        IntPtr hwnd = IntPtr.Zero;
+        string? text = null;
+        try
+        {
+            _ = Llm.Prewarm();
+            var anchor = ScreenUtil.CursorPos();
+            (text, hwnd) = await Capture.GrabSelection();
+            if (text == null)
+            {
+                System.Media.SystemSounds.Beep.Play();
+                return;
+            }
+            if (cts.IsCancellationRequested) return;
+
+            ShowAutoChip(anchor);
+            Log.Write($"autoreplace: start len={text.Length} backend={Settings.Current.Backend}");
+
+            string result;
+            try
+            {
+                result = await Llm.Complete(
+                    Prompts.System, Prompts.Variant(text, Settings.Current.DefaultTone, 0), cts.Token, 0);
+            }
+            catch (OperationCanceledException)
+            {
+                Log.Write("autoreplace: cancelled");
+                return;
+            }
+            catch (Exception ex)
+            {
+                HideAutoChip();
+                Log.Write($"autoreplace: failed — {ex.Message} (falling back to popup)");
+                ShowPopup(text, hwnd, anchor);
+                return;
+            }
+
+            if (cts.IsCancellationRequested) return;
+            if (string.IsNullOrWhiteSpace(result))
+            {
+                HideAutoChip();
+                Log.Write("autoreplace: failed — empty result (falling back to popup)");
+                ShowPopup(text, hwnd, anchor);
+                return;
+            }
+
+            HideAutoChip();
+            await Capture.PasteInto(hwnd, result);
+            Log.Write($"autoreplace: done total={sw.ElapsedMilliseconds}ms");
+        }
+        finally
+        {
+            HideAutoChip();
+            if (ReferenceEquals(_autoCts, cts)) _autoCts = null;
+        }
+    }
+
+    private void ShowAutoChip(ScreenUtil.NativePoint anchor)
+    {
+        _autoChip ??= new ProgressChipWindow();
+        _autoChip.ShowNear(anchor.X, anchor.Y);
+    }
+
+    private void HideAutoChip() => _autoChip?.HideChip();
 
     public void ShowPopup(string text, IntPtr targetHwnd) =>
         ShowPopup(text, targetHwnd, ScreenUtil.CursorPos());
@@ -161,6 +275,8 @@ public sealed class AppController : IDisposable
 
     public void Dispose()
     {
+        _autoCts?.Cancel();
+        _autoChip?.Close();
         _tray.Visible = false;
         _tray.Dispose();
         _hotkey.Dispose();
