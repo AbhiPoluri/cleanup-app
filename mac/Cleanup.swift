@@ -466,6 +466,7 @@ struct PopupView: View {
         HStack {
             Text("Cleanup").font(.system(size: 12, weight: .semibold)).foregroundColor(pal.muted)
             Spacer()
+            instantToggle
             Menu {
                 ForEach(availableModels, id: \.self) { m in
                     Button(action: { switchModel(to: m) }) {
@@ -491,6 +492,25 @@ struct PopupView: View {
             .task { availableModels = await ModelCatalog.forCurrentBackend() }
         }
         .padding(.horizontal, 14).padding(.vertical, 9)
+    }
+
+    @AppStorage(Keys.autoReplace) private var instantOn = false
+
+    // ⚡ instant — toggles hands-free auto-replace right from the popup.
+    // Mono styling mirrors the Windows title-bar toggles: ON = filled/bold, OFF = quiet.
+    private var instantToggle: some View {
+        Button(action: { instantOn.toggle() }) {
+            Text(instantOn ? "⚡ instant ●" : "⚡ instant")
+                .font(.system(size: 11, weight: instantOn ? .semibold : .regular))
+                .foregroundColor(instantOn ? pal.text : pal.muted)
+                .padding(.horizontal, 7).padding(.vertical, 3)
+                .background(RoundedRectangle(cornerRadius: 5)
+                    .fill(instantOn ? pal.surface3 : pal.surface2))
+                .overlay(RoundedRectangle(cornerRadius: 5)
+                    .stroke(instantOn ? pal.lineStrong : pal.line, lineWidth: 1))
+        }
+        .buttonStyle(.plain)
+        .help("Auto-replace — future triggers rewrite the selection in place, no popup")
     }
 
     private func switchModel(to model: String) {

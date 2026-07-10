@@ -16,6 +16,7 @@
           <ColumnDefinition Width="Auto"/>
           <ColumnDefinition Width="Auto"/>
           <ColumnDefinition Width="Auto"/>
+          <ColumnDefinition Width="Auto"/>
         </Grid.ColumnDefinitions>
         <TextBlock x:Name="TitleLabel" Text="Cleanup" FontSize="12" FontWeight="SemiBold"/>
         <Border x:Name="AutoBtn" Grid.Column="1" CornerRadius="5" BorderThickness="1"
@@ -23,11 +24,16 @@
                 ToolTip="Auto — capture new selections as you highlight them">
           <TextBlock x:Name="AutoLabel" Text="⟳ auto" FontSize="11"/>
         </Border>
-        <Border x:Name="ModelChip" Grid.Column="2" CornerRadius="5" BorderThickness="1"
+        <Border x:Name="InstantBtn" Grid.Column="2" CornerRadius="5" BorderThickness="1"
+                Padding="7,3" Margin="0,0,8,0" Cursor="Hand" MouseLeftButtonUp="Instant_Click"
+                ToolTip="Auto-replace — future triggers rewrite the selection in place, no popup">
+          <TextBlock x:Name="InstantLabel" Text="⚡ instant" FontSize="11"/>
+        </Border>
+        <Border x:Name="ModelChip" Grid.Column="3" CornerRadius="5" BorderThickness="1"
                 Padding="8,3" Margin="0,0,8,0">
           <TextBlock x:Name="ModelLabel" FontSize="11"/>
         </Border>
-        <Border x:Name="CloseBtn" Grid.Column="3" CornerRadius="5" BorderThickness="1"
+        <Border x:Name="CloseBtn" Grid.Column="4" CornerRadius="5" BorderThickness="1"
                 Padding="7,3" Cursor="Hand" MouseLeftButtonUp="Close_Click"
                 ToolTip="Close (Esc)">
           <TextBlock x:Name="CloseLabel" Text="✕" FontSize="11"/>
