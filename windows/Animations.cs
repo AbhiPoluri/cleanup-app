@@ -139,7 +139,7 @@ internal sealed class LoadingDots : StackPanel
     }
 }
 
-internal enum CardState { Fresh, RefineLoading, Done, Error }
+internal enum CardState { Fresh, RefineLoading, Streaming, Done, Error }
 
 // A single variant card that updates in place (rather than being torn down and
 // rebuilt), so its state changes can crossfade and its selection ring can
@@ -287,6 +287,34 @@ internal sealed class VariantCard
         Anim.OpacityTo(_doneStack, 0.35, 120);
     }
 
+    // Live partial text as tokens stream in (display-only; the final SetDone text is
+    // the source of truth). First partial swaps the loading dots out for words so the
+    // user sees output ~1s in. Ignored once the card has finalized (Done/Error) — a
+    // stale straggler must never overwrite a completed card.
+    public void ShowPartial(string text)
+    {
+        if (_state == CardState.Done || _state == CardState.Error) return;
+
+        bool firstPaint = _state != CardState.Streaming;
+        _text.Text = text;
+
+        if (firstPaint)
+        {
+            _dots.Stop();
+            _dots.Visibility = Visibility.Collapsed;
+            _error.Visibility = Visibility.Collapsed;
+            _styleLabel.Visibility = Visibility.Collapsed;   // hold the style label until done
+            _state = CardState.Streaming;
+            _doneStack.Visibility = Visibility.Visible;
+            // clear any dim/translate left by ShowRefineLoading and settle to full opacity
+            _doneStack.BeginAnimation(UIElement.OpacityProperty, null);
+            _doneStack.Opacity = 1.0;
+            var (_, t) = Anim.Transforms(_doneStack);
+            t.BeginAnimation(TranslateTransform.YProperty, null);
+            t.Y = 0;
+        }
+    }
+
     public void SetDone(string text, string? styleLabel)
     {
         _dots.Stop();
@@ -297,11 +325,28 @@ internal sealed class VariantCard
         _styleLabel.Text = styleLabel ?? "";
         _styleLabel.Visibility = styleLabel != null ? Visibility.Visible : Visibility.Collapsed;
 
+        bool wasStreaming = _state == CardState.Streaming;
         double from = _state == CardState.RefineLoading ? 0.35 : 0.0;
         _state = CardState.Done;
         _doneStack.Visibility = Visibility.Visible;
 
         var (_, t) = Anim.Transforms(_doneStack);
+        if (wasStreaming)
+        {
+            // words were already on screen — don't re-animate from 0 (that flashes).
+            // Just ensure a settled state and give the style label a subtle fade-in.
+            _doneStack.BeginAnimation(UIElement.OpacityProperty, null);
+            _doneStack.Opacity = 1.0;
+            t.BeginAnimation(TranslateTransform.YProperty, null);
+            t.Y = 0;
+            if (_styleLabel.Visibility == Visibility.Visible)
+            {
+                _styleLabel.Opacity = 0;
+                Anim.OpacityTo(_styleLabel, 1.0, 160);
+            }
+            return;
+        }
+
         _doneStack.BeginAnimation(UIElement.OpacityProperty,
             new DoubleAnimation(from, 1, Anim.Ms(160)) { EasingFunction = Anim.EaseOut });
         t.Y = 4;

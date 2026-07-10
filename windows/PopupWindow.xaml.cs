@@ -616,7 +616,21 @@ public partial class PopupWindow : Window
     {
         try
         {
-            var text = await Llm.Complete(Prompts.System, Prompts.Variant(_original, _tone, idx), ct, idx);
+            // Live tokens into the card as they stream. Display-only: the returned
+            // text below is the source of truth. Guarded so a partial from a
+            // superseded batch (tone change / regenerate / auto recapture) can never
+            // write into the new batch's card — mirrors OnVariantLanded's token guard.
+            void OnPartial(string acc)
+            {
+                if (ct.IsCancellationRequested) return;
+                _ = Dispatcher.BeginInvoke(() =>
+                {
+                    if (ct.IsCancellationRequested) return;
+                    if (idx >= _cards.Count || !ReferenceEquals(_cards[idx], card)) return;
+                    card.ShowPartial(acc);
+                });
+            }
+            var text = await Llm.Complete(Prompts.System, Prompts.Variant(_original, _tone, idx), ct, idx, OnPartial);
             if (ct.IsCancellationRequested) return;
             _results[idx] = text;
             // InvokeAsync (not blocking Invoke) so this LLM-task thread isn't parked
@@ -677,7 +691,17 @@ public partial class PopupWindow : Window
             string? text = null, error = null;
             try
             {
-                text = await Llm.Complete(Prompts.System, Prompts.Refine(current, instruction), cts.Token, idx);
+                void OnPartial(string acc)
+                {
+                    if (cts.Token.IsCancellationRequested) return;
+                    _ = Dispatcher.BeginInvoke(() =>
+                    {
+                        if (cts.Token.IsCancellationRequested) return;
+                        if (idx >= _cards.Count || !ReferenceEquals(_cards[idx], card)) return;
+                        card.ShowPartial(acc);
+                    });
+                }
+                text = await Llm.Complete(Prompts.System, Prompts.Refine(current, instruction), cts.Token, idx, OnPartial);
             }
             catch (Exception ex) { error = ex.Message; }
             if (cts.Token.IsCancellationRequested) return;

@@ -172,6 +172,7 @@ public static class Llm
             var root = new Uri(uri.GetLeftPart(UriPartial.Authority));
             var sw = Stopwatch.StartNew();
             using var req = new HttpRequestMessage(HttpMethod.Head, root);
+            ForceHttp2(req);
             using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(8));
             using var resp = await Http.SendAsync(req, HttpCompletionOption.ResponseHeadersRead, cts.Token);
             NoteEnv(root, resp);   // count the prewarm as the cold handshake so the real request logs as warm
@@ -180,25 +181,71 @@ public static class Llm
         catch (Exception ex) { Log.Write($"prewarm skipped err={ex.Message}"); }
     }
 
-    public static async Task<string> Complete(string system, string user, CancellationToken ct, int variant = -1)
+    // HTTP/2 TRAP: HttpClient.DefaultRequestVersion only applies to the convenience
+    // methods (GetAsync/PostAsync). A manually constructed HttpRequestMessage defaults
+    // to Version 1.1, and SendAsync honours the MESSAGE's own Version — so every
+    // hand-built request here MUST set these two or it silently drops back to 1.1
+    // (that regression is exactly what the telemetry caught: httpver=1.1). Applied to
+    // Ollama too — h2 negotiation harmlessly downgrades to 1.1 on localhost.
+    private static void ForceHttp2(HttpRequestMessage req)
+    {
+        req.Version = HttpVersion.Version20;
+        req.VersionPolicy = HttpVersionPolicy.RequestVersionOrLower;
+    }
+
+    public static async Task<string> Complete(
+        string system, string user, CancellationToken ct, int variant = -1, Action<string>? onPartial = null)
     {
         var s = Settings.Current;
         string raw = s.Backend switch
         {
-            "openai" => await OpenAi(s, system, user, variant, ct),
-            "chatgpt" => await ChatGpt(s, system, user, variant, ct),
-            _ => await Ollama(s, system, user, variant, ct),
+            "openai" => await OpenAi(s, system, user, variant, ct, onPartial),
+            "chatgpt" => await ChatGpt(s, system, user, variant, ct, onPartial),
+            _ => await Ollama(s, system, user, variant, ct, onPartial),
         };
         return Clean(raw);
     }
 
-    private static async Task<string> Ollama(Settings s, string system, string user, int v, CancellationToken ct)
+    // Rate-limits the display-only partial callback so token-per-event Dispatcher
+    // traffic can't jank WPF. First partial fires immediately (words on screen ~1s
+    // in); subsequent ones at most every MinIntervalMs. Materialises the accumulated
+    // string only when it actually emits (never on a throttled tick). Also logs the
+    // one-time first-partial-shown latency per variant. The FINAL text always comes
+    // from the method return value — this path is purely for perceived speed.
+    private sealed class PartialThrottle
+    {
+        private const int MinIntervalMs = 80;
+        private readonly Action<string>? _cb;
+        private readonly Stopwatch _sw;
+        private readonly int _v;
+        private long _lastEmitMs = -1;
+        private bool _firstLogged;
+
+        public PartialThrottle(Action<string>? cb, Stopwatch sw, int v) { _cb = cb; _sw = sw; _v = v; }
+
+        public void Offer(StringBuilder acc)
+        {
+            if (_cb == null) return;
+            long now = _sw.ElapsedMilliseconds;
+            if (_lastEmitMs >= 0 && now - _lastEmitMs < MinIntervalMs) return;
+            _lastEmitMs = now;
+            if (!_firstLogged)
+            {
+                _firstLogged = true;
+                Log.Write($"sse first-partial-shown={now}ms v={_v}");
+            }
+            _cb(acc.ToString());
+        }
+    }
+
+    private static async Task<string> Ollama(
+        Settings s, string system, string user, int v, CancellationToken ct, Action<string>? onPartial = null)
     {
         var url = s.OllamaUrl.TrimEnd('/') + "/api/chat";
         var body = JsonSerializer.Serialize(new
         {
             model = s.OllamaModel,
-            stream = false,
+            stream = true,   // JSONL stream — same accumulated-callback contract as the remote backends
             messages = new[]
             {
                 new { role = "system", content = system },
@@ -210,6 +257,7 @@ public static class Llm
         {
             using var req = new HttpRequestMessage(HttpMethod.Post, url)
             { Content = new StringContent(body, Encoding.UTF8, "application/json") };
+            ForceHttp2(req);
             _lastRequestUtc = DateTime.UtcNow;
             // ResponseHeadersRead so TTFB is the real time-to-first-byte, timed
             // separately from the body read below.
@@ -217,11 +265,37 @@ public static class Llm
             long ttfb = sw.ElapsedMilliseconds;
             NoteEnv(new Uri(url), resp);
             if (!resp.IsSuccessStatusCode) throw new Exception($"Ollama HTTP {(int)resp.StatusCode}");
-            var json = await resp.Content.ReadAsStringAsync(ct);
+
+            // Ollama streams newline-delimited JSON objects: each carries a
+            // message.content fragment, and the final one has done:true. Accumulate
+            // the fragments; throttle the partial callback so local models feel instant.
+            var throttle = new PartialThrottle(onPartial, sw, v);
+            var outText = new StringBuilder();
+            using var stream = await resp.Content.ReadAsStreamAsync(ct);
+            using var reader = new StreamReader(stream);
+            string? line;
+            while ((line = await reader.ReadLineAsync(ct)) != null)
+            {
+                if (line.Length == 0) continue;
+                JsonDocument ev;
+                try { ev = JsonDocument.Parse(line); }
+                catch { continue; }
+                using (ev)
+                {
+                    if (ev.RootElement.TryGetProperty("message", out var m) &&
+                        m.TryGetProperty("content", out var c) && c.ValueKind == JsonValueKind.String)
+                    {
+                        var frag = c.GetString();
+                        if (!string.IsNullOrEmpty(frag)) { outText.Append(frag); throttle.Offer(outText); }
+                    }
+                    if (ev.RootElement.TryGetProperty("done", out var done) &&
+                        done.ValueKind == JsonValueKind.True)
+                        break;
+                }
+            }
             long bodyMs = sw.ElapsedMilliseconds - ttfb;
-            using var doc = JsonDocument.Parse(json);
-            var content = doc.RootElement.GetProperty("message").GetProperty("content").GetString()
-                          ?? throw new Exception("Ollama: empty response");
+            var content = outText.ToString();
+            if (content.Length == 0) throw new Exception("Ollama: empty response");
             Log.Write($"llm ok backend=ollama model={s.OllamaModel} v={v} ttfb={ttfb}ms body={bodyMs}ms total={sw.ElapsedMilliseconds}ms");
             return content;
         }
@@ -233,11 +307,13 @@ public static class Llm
         }
     }
 
-    private static async Task<string> OpenAi(Settings s, string system, string user, int v, CancellationToken ct)
+    private static async Task<string> OpenAi(
+        Settings s, string system, string user, int v, CancellationToken ct, Action<string>? onPartial = null)
     {
         var body = JsonSerializer.Serialize(new
         {
             model = s.ApiModel,
+            stream = true,   // SSE — choices[0].delta.content per event, terminated by "data: [DONE]"
             messages = new[]
             {
                 new { role = "system", content = system },
@@ -255,6 +331,7 @@ public static class Llm
         {
             using var req = new HttpRequestMessage(HttpMethod.Post, url)
             { Content = new StringContent(body, Encoding.UTF8, "application/json") };
+            ForceHttp2(req);
             req.Headers.Authorization = new AuthenticationHeaderValue("Bearer", s.ApiKey);
             _lastRequestUtc = DateTime.UtcNow;
             using var resp = await Http.SendAsync(req, HttpCompletionOption.ResponseHeadersRead, ct);
@@ -265,11 +342,38 @@ public static class Llm
                 var errBody = await resp.Content.ReadAsStringAsync(ct);
                 throw new Exception($"API HTTP {(int)resp.StatusCode}: {ExtractApiError(errBody)}");
             }
-            var json = await resp.Content.ReadAsStringAsync(ct);
+
+            // OpenAI/OpenRouter SSE: each "data: {…}" line carries choices[0].delta.content;
+            // "data: [DONE]" terminates. (OpenRouter also sends ": …" keep-alive comment
+            // lines — they don't start with "data: " so they're skipped.)
+            var throttle = new PartialThrottle(onPartial, sw, v);
+            var outText = new StringBuilder();
+            using var stream = await resp.Content.ReadAsStreamAsync(ct);
+            using var reader = new StreamReader(stream);
+            string? line;
+            while ((line = await reader.ReadLineAsync(ct)) != null)
+            {
+                if (!line.StartsWith("data: ")) continue;
+                var data = line.Substring(6);
+                if (data == "[DONE]") break;
+                JsonDocument ev;
+                try { ev = JsonDocument.Parse(data); }
+                catch { continue; }
+                using (ev)
+                {
+                    if (ev.RootElement.TryGetProperty("choices", out var choices) &&
+                        choices.ValueKind == JsonValueKind.Array && choices.GetArrayLength() > 0 &&
+                        choices[0].TryGetProperty("delta", out var delta) &&
+                        delta.TryGetProperty("content", out var cEl) && cEl.ValueKind == JsonValueKind.String)
+                    {
+                        var frag = cEl.GetString();
+                        if (!string.IsNullOrEmpty(frag)) { outText.Append(frag); throttle.Offer(outText); }
+                    }
+                }
+            }
             long bodyMs = sw.ElapsedMilliseconds - ttfb;
-            using var doc = JsonDocument.Parse(json);
-            var content = doc.RootElement.GetProperty("choices")[0].GetProperty("message").GetProperty("content").GetString()
-                          ?? throw new Exception("API: empty response");
+            var content = outText.ToString();
+            if (content.Length == 0) throw new Exception("API: empty response");
             Log.Write($"llm ok backend=openai model={s.ApiModel} v={v} ttfb={ttfb}ms body={bodyMs}ms total={sw.ElapsedMilliseconds}ms");
             return content;
         }
@@ -305,7 +409,8 @@ public static class Llm
     // ChatGPT subscription via Codex CLI login (%USERPROFILE%\.codex\auth.json).
     // The endpoint only speaks SSE (stream:true mandatory) and only allows certain
     // models for ChatGPT accounts (gpt-5.5 as of 2026-07).
-    private static async Task<string> ChatGpt(Settings s, string system, string user, int v, CancellationToken ct)
+    private static async Task<string> ChatGpt(
+        Settings s, string system, string user, int v, CancellationToken ct, Action<string>? onPartial = null)
     {
         var sw = Stopwatch.StartNew();
         long ttfb = -1, sseFirst = -1;
@@ -349,6 +454,7 @@ public static class Llm
             using var req = new HttpRequestMessage(HttpMethod.Post,
                 "https://chatgpt.com/backend-api/codex/responses")
             { Content = new StringContent(body, Encoding.UTF8, "application/json") };
+            ForceHttp2(req);
             req.Headers.Authorization = new AuthenticationHeaderValue("Bearer", accessToken);
             req.Headers.TryAddWithoutValidation("chatgpt-account-id", accountId);
             req.Headers.TryAddWithoutValidation("OpenAI-Beta", "responses=experimental");
@@ -368,6 +474,7 @@ public static class Llm
             if (!resp.IsSuccessStatusCode)
                 throw new Exception($"ChatGPT HTTP {(int)resp.StatusCode}");
 
+            var throttle = new PartialThrottle(onPartial, sw, v);
             var outText = new StringBuilder();
             using var stream = await resp.Content.ReadAsStreamAsync(ct);
             using var reader = new StreamReader(stream);
@@ -387,7 +494,10 @@ public static class Llm
                     {
                         case "response.output_text.delta":
                             if (ev.RootElement.TryGetProperty("delta", out var d))
+                            {
                                 outText.Append(d.GetString());
+                                throttle.Offer(outText);   // live tokens into the card (throttled)
+                            }
                             break;
                         case "response.completed":
                             LogOk();
