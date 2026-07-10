@@ -406,9 +406,16 @@ public static class Llm
         return trimmed.Length > 200 ? trimmed[..200] + "…" : (trimmed.Length > 0 ? trimmed : "no response body");
     }
 
+    // Codex models allowed for ChatGPT-subscription accounts (probed 2026-07-09;
+    // gpt-5.5-mini and the -codex-mini variants are rejected with 400).
+    public static readonly string[] ChatgptModels = { "gpt-5.5", "gpt-5.4", "gpt-5.4-mini" };
+
+    private static string ValidEffort(string e) =>
+        e is "low" or "medium" or "high" ? e : "low";
+
     // ChatGPT subscription via Codex CLI login (%USERPROFILE%\.codex\auth.json).
     // The endpoint only speaks SSE (stream:true mandatory) and only allows certain
-    // models for ChatGPT accounts (gpt-5.5 as of 2026-07).
+    // models for ChatGPT accounts (see ChatgptModels).
     private static async Task<string> ChatGpt(
         Settings s, string system, string user, int v, CancellationToken ct, Action<string>? onPartial = null)
     {
@@ -449,6 +456,9 @@ public static class Llm
                 },
                 stream = true,   // MANDATORY: this endpoint only speaks SSE
                 store = false,
+                // low effort ≈3x faster for short rewrites; also required for
+                // gpt-5.4-mini, which stalls at its default effort (probed 2026-07-09)
+                reasoning = new { effort = ValidEffort(s.ChatgptEffort) },
             });
 
             using var req = new HttpRequestMessage(HttpMethod.Post,

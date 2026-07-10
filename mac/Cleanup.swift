@@ -6,6 +6,7 @@ import SwiftUI
 enum Keys {
     static let backend = "backend"                // "ollama" | "openai" | "chatgpt"
     static let chatgptModel = "chatgptModel"
+    static let chatgptEffort = "chatgptEffort"    // "low" | "medium" | "high"
     static let ollamaURL = "ollamaURL"
     static let ollamaModel = "ollamaModel"
     static let apiBase = "apiBase"
@@ -25,6 +26,7 @@ func registerDefaults() {
         Keys.apiBase: "https://api.openai.com",
         Keys.apiModel: "gpt-4o-mini",
         Keys.chatgptModel: "gpt-5.5",
+        Keys.chatgptEffort: "low",
         Keys.defaultTone: "Clean",
         Keys.defaultCount: 3,
     ])
@@ -114,6 +116,10 @@ enum LLM {
         return content
     }
 
+    private static func validEffort(_ e: String?) -> String {
+        switch e { case "low", "medium", "high": return e! default: return "low" }
+    }
+
     private static func openAI(system: String, user: String) async throws -> String {
         let d = defaults()
         var base = (d.string(forKey: Keys.apiBase) ?? "https://api.openai.com")
@@ -191,6 +197,9 @@ enum LLM {
             ]],
             "stream": true,
             "store": false,
+            // low effort ≈3x faster for short rewrites; also required for
+            // gpt-5.4-mini, which stalls at its default effort (probed 2026-07-09)
+            "reasoning": ["effort": validEffort(defaults().string(forKey: Keys.chatgptEffort))],
         ]
         req.httpBody = try JSONSerialization.data(withJSONObject: body)
 
@@ -237,8 +246,9 @@ enum LLM {
 // MARK: - Model catalog
 
 enum ModelCatalog {
-    // probed 2026-07-02: the ChatGPT-sub codex endpoint rejects every other model name
-    static let chatgpt = ["gpt-5.5"]
+    // probed 2026-07-09: allowed for ChatGPT-sub accounts; gpt-5.5-mini and the
+    // -codex-mini variants are rejected with 400
+    static let chatgpt = ["gpt-5.5", "gpt-5.4", "gpt-5.4-mini"]
 
     static func ollama() async -> [String] {
         let base = defaults().string(forKey: Keys.ollamaURL) ?? "http://localhost:11434"
@@ -780,6 +790,7 @@ struct SettingsView: View {
     @AppStorage(Keys.apiKey) private var apiKey = ""
     @AppStorage(Keys.apiModel) private var apiModel = "gpt-4o-mini"
     @AppStorage(Keys.chatgptModel) private var chatgptModel = "gpt-5.5"
+    @AppStorage(Keys.chatgptEffort) private var chatgptEffort = "low"
     @AppStorage(Keys.defaultTone) private var defaultTone = "Clean"
     @AppStorage(Keys.defaultCount) private var defaultCount = 3
     @State private var ollamaModels: [String] = []
@@ -807,6 +818,11 @@ struct SettingsView: View {
                 Picker("Model", selection: $chatgptModel) {
                     ForEach(chatgptModels, id: \.self) { Text($0).tag($0) }
                 }
+                Picker("Reasoning", selection: $chatgptEffort) {
+                    ForEach(["low", "medium", "high"], id: \.self) { Text($0).tag($0) }
+                }
+                Text("Low reasoning is ~3x faster for short rewrites. gpt-5.4-mini is the fastest model (~1s).")
+                    .font(.system(size: 11)).foregroundColor(.secondary)
                 CodexStatusView()
             } else {
                 TextField("Base URL", text: $apiBase)

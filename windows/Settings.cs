@@ -13,6 +13,9 @@ public class Settings
     public string ApiKey { get; set; } = "";
     public string ApiModel { get; set; } = "gpt-4o-mini";
     public string ChatgptModel { get; set; } = "gpt-5.5";
+    // Reasoning effort for the Codex endpoint ("low"/"medium"/"high"). Low is a big
+    // speed win: gpt-5.4-mini@low ≈1s vs gpt-5.5@medium ≈3s (probed 2026-07-09).
+    public string ChatgptEffort { get; set; } = "low";
     public string DefaultTone { get; set; } = "Clean";
     public int DefaultCount { get; set; } = 3;
     public bool FloatingButton { get; set; } = true;

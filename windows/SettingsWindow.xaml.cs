@@ -22,8 +22,12 @@ public partial class SettingsWindow : Window
         SelectByTag(BackendBox, s.Backend);
         OllamaUrlBox.Text = s.OllamaUrl;
         OllamaModelBox.Text = s.OllamaModel;
-        foreach (var m in new[] { "gpt-5.5" }) ChatgptModelBox.Items.Add(new ComboBoxItem { Content = m });
-        ChatgptModelBox.SelectedIndex = 0;
+        foreach (var m in Llm.ChatgptModels) ChatgptModelBox.Items.Add(new ComboBoxItem { Content = m });
+        SelectByContent(ChatgptModelBox, s.ChatgptModel);
+        if (ChatgptModelBox.SelectedIndex < 0) ChatgptModelBox.SelectedIndex = 0;
+        foreach (var e in new[] { "low", "medium", "high" }) ChatgptEffortBox.Items.Add(new ComboBoxItem { Content = e });
+        SelectByContent(ChatgptEffortBox, s.ChatgptEffort);
+        if (ChatgptEffortBox.SelectedIndex < 0) ChatgptEffortBox.SelectedIndex = 0;
         ApiBaseBox.Text = s.ApiBase;
         ApiKeyBox.Password = s.ApiKey;
         ApiModelBox.Text = s.ApiModel;
@@ -191,6 +195,7 @@ public partial class SettingsWindow : Window
         s.OllamaUrl = OllamaUrlBox.Text.Trim();
         s.OllamaModel = OllamaModelBox.Text.Trim();
         s.ChatgptModel = ((ChatgptModelBox.SelectedItem as ComboBoxItem)?.Content as string) ?? "gpt-5.5";
+        s.ChatgptEffort = ((ChatgptEffortBox.SelectedItem as ComboBoxItem)?.Content as string) ?? "low";
         s.ApiBase = ApiBaseBox.Text.Trim();
         s.ApiKey = ApiKeyBox.Password;
         s.ApiModel = ApiModelBox.Text.Trim();
