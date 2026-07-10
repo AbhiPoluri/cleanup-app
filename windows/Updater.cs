@@ -23,8 +23,6 @@ public sealed class UpdateInfo
 public static class Updater
 {
     public const string Repo = "AbhiPoluri/cleanup-app";
-    private const string LatestApi =
-        "https://api.github.com/repos/AbhiPoluri/cleanup-app/releases/latest";
     private const string AssetName = "CleanupSetup.exe";
     private const long MinInstallerBytes = 10L * 1024 * 1024; // sanity floor: >10 MB
 
@@ -61,36 +59,33 @@ public static class Updater
         var result = new UpdateInfo();
         try
         {
+            // Resolve the latest tag WITHOUT the GitHub API: api.github.com allows
+            // only 60 unauthenticated requests/hour PER IP (shared by the whole
+            // network — real users hit this). The website's /releases/latest URL
+            // redirects to /releases/tag/vX.Y.Z with no such limit, and the
+            // installer URL is constructible from the tag.
             using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(10) };
-            // GitHub requires a User-Agent or it returns 403.
             http.DefaultRequestHeaders.UserAgent.ParseAdd("Cleanup-Updater");
-            http.DefaultRequestHeaders.Accept.ParseAdd("application/vnd.github+json");
 
-            var json = await http.GetStringAsync(LatestApi);
-            using var doc = JsonDocument.Parse(json);
-            var root = doc.RootElement;
+            using var resp = await http.GetAsync(
+                $"https://github.com/{Repo}/releases/latest",
+                HttpCompletionOption.ResponseHeadersRead);
+            resp.EnsureSuccessStatusCode();
 
-            result.LatestVersion = root.TryGetProperty("tag_name", out var tag)
-                ? tag.GetString() ?? "" : "";
+            var finalPath = resp.RequestMessage?.RequestUri?.AbsolutePath ?? "";
+            const string tagMarker = "/releases/tag/";
+            var at = finalPath.IndexOf(tagMarker, StringComparison.OrdinalIgnoreCase);
+            if (at < 0)
+                throw new Exception($"no release tag in redirect target ({finalPath})");
 
-            if (root.TryGetProperty("assets", out var assets)
-                && assets.ValueKind == JsonValueKind.Array)
-            {
-                foreach (var a in assets.EnumerateArray())
-                {
-                    var name = a.TryGetProperty("name", out var n) ? n.GetString() : null;
-                    if (string.Equals(name, AssetName, StringComparison.OrdinalIgnoreCase))
-                    {
-                        result.DownloadUrl = a.TryGetProperty("browser_download_url", out var u)
-                            ? u.GetString() ?? "" : "";
-                        break;
-                    }
-                }
-            }
+            result.LatestVersion = Uri.UnescapeDataString(
+                finalPath[(at + tagMarker.Length)..].Trim('/'));
+            result.DownloadUrl =
+                $"https://github.com/{Repo}/releases/download/{result.LatestVersion}/{AssetName}";
 
             result.UpdateAvailable = IsNewer(result.LatestVersion);
             Log.Write($"updater: current={CurrentVersion} latest={result.LatestVersion} " +
-                      $"available={result.UpdateAvailable} asset={(result.DownloadUrl.Length > 0)}");
+                      $"available={result.UpdateAvailable}");
         }
         catch (Exception ex)
         {
