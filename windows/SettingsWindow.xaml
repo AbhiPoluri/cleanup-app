@@ -124,16 +124,23 @@
         <ColumnDefinition Width="110"/>
         <ColumnDefinition Width="*"/>
       </Grid.ColumnDefinitions>
-      <TextBlock Text="Hotkey" VerticalAlignment="Center"/>
+      <TextBlock Text="Popup hotkey" VerticalAlignment="Center"/>
       <TextBox x:Name="HotkeyBox" Grid.Column="1" IsReadOnly="True" Cursor="Hand"
                PreviewKeyDown="Hotkey_KeyDown" GotFocus="Hotkey_GotFocus"/>
     </Grid>
 
-    <CheckBox x:Name="FloatingButtonCheck" Margin="0,0,0,8"
-              Content="Show ✦ button when I select text with the mouse"/>
+    <Grid Margin="0,0,0,8">
+      <Grid.ColumnDefinitions>
+        <ColumnDefinition Width="110"/>
+        <ColumnDefinition Width="*"/>
+      </Grid.ColumnDefinitions>
+      <TextBlock Text="Instant hotkey" VerticalAlignment="Center"/>
+      <TextBox x:Name="HotkeyBox2" Grid.Column="1" IsReadOnly="True" Cursor="Hand"
+               PreviewKeyDown="Hotkey2_KeyDown" GotFocus="Hotkey2_GotFocus"/>
+    </Grid>
 
-    <CheckBox x:Name="AutoReplaceCheck" Margin="0,0,0,8"
-              Content="Auto-replace: instantly rewrite selection with the first variant, no popup"/>
+    <CheckBox x:Name="FloatingButtonCheck" Margin="0,0,0,8"
+              Content="Show ✦ / ⚡ buttons when I select text with the mouse"/>
 
     <Grid Margin="0,0,0,8">
       <Grid.ColumnDefinitions>
@@ -141,7 +148,7 @@
         <ColumnDefinition Width="*"/>
         <ColumnDefinition Width="Auto"/>
       </Grid.ColumnDefinitions>
-      <TextBlock Text="✦ button size" VerticalAlignment="Center"/>
+      <TextBlock Text="Button size" VerticalAlignment="Center"/>
       <Slider x:Name="ButtonSizeSlider" Grid.Column="1" Minimum="22" Maximum="48"
               TickFrequency="1" IsSnapToTickEnabled="True" VerticalAlignment="Center"
               ValueChanged="ButtonSize_Changed"/>
@@ -166,8 +173,8 @@
     <CheckBox x:Name="AutoCloseCheck" Margin="0,0,0,8"
               Content="Auto-close when clicking away"/>
 
-    <TextBlock Text="Trigger: select text anywhere, then Ctrl+Shift+E — or click the ✦ button."
-               FontSize="11" Foreground="Gray" Margin="0,4,0,12"/>
+    <TextBlock x:Name="TriggerHint"
+               FontSize="11" Foreground="Gray" Margin="0,4,0,12" TextWrapping="Wrap"/>
 
     <Separator Margin="0,4,0,8"/>
 

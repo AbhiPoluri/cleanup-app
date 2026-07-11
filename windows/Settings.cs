@@ -19,9 +19,6 @@ public class Settings
     public string DefaultTone { get; set; } = "Clean";
     public int DefaultCount { get; set; } = 3;
     public bool FloatingButton { get; set; } = true;
-    // hands-free auto-replace: on trigger, generate ONE variant and paste it
-    // straight back over the selection — no popup. OFF by default.
-    public bool AutoReplace { get; set; } = false;
     // inline diff panel toggle — persists across popup opens
     public bool DiffView { get; set; } = false;
     // click-away dismissal — OFF by default (popup stays open until Esc / ✕ / Copy / Replace)
@@ -37,6 +34,10 @@ public class Settings
     public uint HotkeyModifiers { get; set; } = 0x2 | 0x4; // Ctrl+Shift
     public uint HotkeyKey { get; set; } = 0x45;            // E
     public string HotkeyDisplay { get; set; } = "Ctrl+Shift+E";
+    // Second global hotkey — the instant (hands-free auto-replace) trigger.
+    public uint HotkeyModifiers2 { get; set; } = 0x2 | 0x4; // Ctrl+Shift
+    public uint HotkeyKey2 { get; set; } = 0x52;            // R
+    public string HotkeyDisplay2 { get; set; } = "Ctrl+Shift+R";
 
     private static string Dir =>
         Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "Cleanup");

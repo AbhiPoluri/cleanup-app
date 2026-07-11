@@ -13,6 +13,9 @@ public partial class SettingsWindow : Window
     private uint _hkMods = Settings.Current.HotkeyModifiers;
     private uint _hkKey = Settings.Current.HotkeyKey;
     private string _hkDisplay = Settings.Current.HotkeyDisplay;
+    private uint _hk2Mods = Settings.Current.HotkeyModifiers2;
+    private uint _hk2Key = Settings.Current.HotkeyKey2;
+    private string _hk2Display = Settings.Current.HotkeyDisplay2;
 
     public SettingsWindow()
     {
@@ -34,11 +37,13 @@ public partial class SettingsWindow : Window
         SelectByContent(ToneBox, s.DefaultTone);
         SelectByContent(CountBox, s.DefaultCount.ToString());
         FloatingButtonCheck.IsChecked = s.FloatingButton;
-        AutoReplaceCheck.IsChecked = s.AutoReplace;
         AutoCloseCheck.IsChecked = s.AutoClose;
         ButtonSizeSlider.Value = Math.Clamp(s.FloatingButtonSize, 22, 48);
         FontSizeSlider.Value = Math.Clamp(s.FontSize, 11, 18);
         HotkeyBox.Text = _hkDisplay;
+        HotkeyBox2.Text = _hk2Display;
+        TriggerHint.Text = $"Trigger: select text, then {_hkDisplay} for the popup or {_hk2Display} " +
+                           "to instantly rewrite in place — or click the ✦ / ⚡ buttons.";
         CodexStatusLabel.Text = Llm.CodexStatus();
         VersionLabel.Text = Updater.IsDevBuild ? "dev build — update check only" : Updater.DisplayVersion;
 
@@ -148,12 +153,21 @@ public partial class SettingsWindow : Window
         if (FontSizeValue != null) FontSizeValue.Text = ((int)Math.Round(e.NewValue)).ToString();
     }
 
-    private void Hotkey_GotFocus(object sender, RoutedEventArgs e)
-    {
+    private void Hotkey_GotFocus(object sender, RoutedEventArgs e) =>
         HotkeyBox.Text = "press the new hotkey…";
-    }
 
-    private void Hotkey_KeyDown(object sender, KeyEventArgs e)
+    private void Hotkey2_GotFocus(object sender, RoutedEventArgs e) =>
+        HotkeyBox2.Text = "press the new hotkey…";
+
+    private void Hotkey_KeyDown(object sender, KeyEventArgs e) =>
+        RecordInto(e, HotkeyBox, (m, k, d) => { _hkMods = m; _hkKey = k; _hkDisplay = d; });
+
+    private void Hotkey2_KeyDown(object sender, KeyEventArgs e) =>
+        RecordInto(e, HotkeyBox2, (m, k, d) => { _hk2Mods = m; _hk2Key = k; _hk2Display = d; });
+
+    // Shared recorder: turns a keypress into a (modifiers, vk, display) hotkey and
+    // stores it via the callback. Ignores lone modifiers; requires a modifier.
+    private static void RecordInto(KeyEventArgs e, TextBox box, Action<uint, uint, string> store)
     {
         e.Handled = true;
         var key = e.Key == Key.System ? e.SystemKey : e.Key;
@@ -164,12 +178,10 @@ public partial class SettingsWindow : Window
         var mods = Keyboard.Modifiers;
         if (mods == ModifierKeys.None)
         {
-            HotkeyBox.Text = "needs a modifier (Ctrl / Alt / Shift) — try again";
+            box.Text = "needs a modifier (Ctrl / Alt / Shift) — try again";
             return;
         }
-        _hkMods = (uint)mods; // WPF ModifierKeys values match Win32 MOD_* flags
-        _hkKey = (uint)KeyInterop.VirtualKeyFromKey(key);
-        _hkDisplay = string.Join("+", new[]
+        var display = string.Join("+", new[]
         {
             mods.HasFlag(ModifierKeys.Control) ? "Ctrl" : null,
             mods.HasFlag(ModifierKeys.Alt) ? "Alt" : null,
@@ -177,7 +189,9 @@ public partial class SettingsWindow : Window
             mods.HasFlag(ModifierKeys.Windows) ? "Win" : null,
             key.ToString(),
         }.Where(x => x != null));
-        HotkeyBox.Text = _hkDisplay;
+        box.Text = display;
+        // WPF ModifierKeys values match Win32 MOD_* flags
+        store((uint)mods, (uint)KeyInterop.VirtualKeyFromKey(key), display);
     }
 
     private void UpdatePanels()
@@ -203,7 +217,6 @@ public partial class SettingsWindow : Window
         s.DefaultTone = ((ToneBox.SelectedItem as ComboBoxItem)?.Content as string) ?? "Clean";
         s.DefaultCount = int.TryParse((CountBox.SelectedItem as ComboBoxItem)?.Content as string, out var n) ? n : 3;
         s.FloatingButton = FloatingButtonCheck.IsChecked == true;
-        s.AutoReplace = AutoReplaceCheck.IsChecked == true;
         s.AutoClose = AutoCloseCheck.IsChecked == true;
         s.FloatingButtonSize = Math.Round(ButtonSizeSlider.Value);
         s.FontSize = Math.Round(FontSizeSlider.Value);
@@ -213,9 +226,14 @@ public partial class SettingsWindow : Window
             s.HotkeyKey = _hkKey;
             s.HotkeyDisplay = _hkDisplay;
         }
+        if (_hk2Key != 0)
+        {
+            s.HotkeyModifiers2 = _hk2Mods;
+            s.HotkeyKey2 = _hk2Key;
+            s.HotkeyDisplay2 = _hk2Display;
+        }
         s.Save();
         AppController.Current?.RefreshHotkey();
-        AppController.Current?.SyncAutoReplaceMenu();
         Close();
     }
 }

@@ -149,18 +149,7 @@ public partial class PopupWindow : Window
         PopOutBtn.BorderBrush = _t.Line;
         PopOutLabel.Foreground = _t.Muted;
         RestyleAuto();
-        RestyleInstant();
         RestyleDiffToggle();
-    }
-
-    private void RestyleInstant()
-    {
-        bool on = Settings.Current.AutoReplace;
-        InstantBtn.Background = on ? _t.Surface3 : _t.Surface2;
-        InstantBtn.BorderBrush = on ? _t.LineStrong : _t.Line;
-        InstantLabel.Foreground = on ? _t.Text : _t.Muted;
-        InstantLabel.FontWeight = on ? FontWeights.SemiBold : FontWeights.Normal;
-        InstantLabel.Text = on ? "⚡ instant ●" : "⚡ instant";
     }
 
     private void RestyleAuto()
@@ -409,7 +398,7 @@ public partial class PopupWindow : Window
             if (ReferenceEquals(d, CardsScroll) || ReferenceEquals(d, RefineBorder) ||
                 ReferenceEquals(d, ChipsPanel) || ReferenceEquals(d, CopyBtn) ||
                 ReferenceEquals(d, ReplaceBtn) || ReferenceEquals(d, ModelChip) ||
-                ReferenceEquals(d, AutoBtn) || ReferenceEquals(d, InstantBtn) ||
+                ReferenceEquals(d, AutoBtn) ||
                 ReferenceEquals(d, DiffPanel) ||
                 ReferenceEquals(d, DiffBtn) || ReferenceEquals(d, PopOutBtn) ||
                 ReferenceEquals(d, CloseBtn))
@@ -433,18 +422,6 @@ public partial class PopupWindow : Window
         RestyleAuto();
         Anim.ScalePop(AutoBtn, 1.12, 160);
         Log.Write($"auto mode {(on ? "ON" : "OFF")}");
-    }
-
-    private void Instant_Click(object sender, MouseButtonEventArgs e)
-    {
-        e.Handled = true;
-        var s = Settings.Current;
-        s.AutoReplace = !s.AutoReplace;
-        s.Save();
-        AppController.Current?.SyncAutoReplaceMenu();
-        RestyleInstant();
-        Anim.ScalePop(InstantBtn, 1.12, 160);
-        Log.Write($"autoreplace toggled {(s.AutoReplace ? "ON" : "OFF")} (popup)");
     }
 
     private void Close_Click(object sender, MouseButtonEventArgs e)
@@ -803,7 +780,6 @@ public partial class PopupWindow : Window
         WireButton(CopyBtn, 0.9);
         WireButton(ReplaceBtn, 1.0);
         WireButton(AutoBtn, 1.0);
-        WireButton(InstantBtn, 1.0);
         WireButton(CloseBtn, 0.85);
         WireButton(ModelChip, 0.85);
         WireButton(DiffBtn, 1.0);

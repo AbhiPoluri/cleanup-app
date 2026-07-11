@@ -35,7 +35,8 @@ public sealed class SelectionWatcher : IDisposable
 
     private readonly HookProc _proc;   // held so the GC can't collect the hook callback
     private readonly IntPtr _hook;
-    private readonly Action _onClicked;
+    private readonly Action _onClicked;   // ✦ chip → open the popup
+    private readonly Action _onInstant;   // ⚡ chip → hands-free auto-replace
     private readonly Func<bool> _popupOpen;
     private readonly Func<bool> _autoMode;
     private readonly Action<string, IntPtr> _onAutoText;
@@ -46,10 +47,11 @@ public sealed class SelectionWatcher : IDisposable
     private uint _lastUpTime;
     private POINT _lastUpAt;
 
-    public SelectionWatcher(Action onClicked, Func<bool> popupOpen,
+    public SelectionWatcher(Action onClicked, Action onInstant, Func<bool> popupOpen,
                             Func<bool> autoMode, Action<string, IntPtr> onAutoText)
     {
         _onClicked = onClicked;
+        _onInstant = onInstant;
         _popupOpen = popupOpen;
         _autoMode = autoMode;
         _onAutoText = onAutoText;
@@ -139,13 +141,20 @@ public sealed class SelectionWatcher : IDisposable
 
     private void ShowButton(int screenX, int screenY)
     {
-        _button ??= new FloatingButtonWindow(() =>
-        {
-            Log.Write("floating button clicked");
-            HideButton();
-            _onClicked();
-        });
-        Log.Write($"floating button shown near {screenX},{screenY}");
+        _button ??= new FloatingButtonWindow(
+            onStar: () =>
+            {
+                Log.Write("floating ✦ clicked");
+                HideButton();
+                _onClicked();
+            },
+            onBolt: () =>
+            {
+                Log.Write("floating ⚡ clicked");
+                HideButton();
+                _onInstant();
+            });
+        Log.Write($"floating buttons shown near {screenX},{screenY}");
         _button.ShowNear(screenX, screenY);
     }
 
@@ -173,21 +182,24 @@ public sealed class FloatingButtonWindow : Window
     private static readonly IntPtr HWND_TOPMOST = new(-1);
     private const uint SWP_NOACTIVATE = 0x0010, SWP_SHOWWINDOW = 0x0040;
 
-    // logical (DIP) button size; user-configurable (Settings.FloatingButtonSize,
+    // logical (DIP) chip size; user-configurable (Settings.FloatingButtonSize,
     // 22–48, default 30). Read fresh on each ShowNear so a size change in Settings
     // takes effect on the next appearance. Physical size scales with monitor DPI.
     private static double BtnDip => Math.Clamp(Settings.Current.FloatingButtonSize, 22, 48);
+    // gap (DIP) between the two chips; scales with the chip size
+    private static double GapDip => Math.Round(BtnDip * 0.2);
 
     private readonly DispatcherTimer _autoHide = new() { Interval = TimeSpan.FromSeconds(4) };
-    private readonly Border _border;
-    private readonly TextBlock _glyph;
+    private readonly StackPanel _row;
+    private readonly Border _star;
+    private readonly TextBlock _starGlyph;
+    private readonly Border _bolt;
+    private readonly TextBlock _boltGlyph;
     private readonly ScaleTransform _scale = new(1, 1);
     private bool _hiding;
 
-    public FloatingButtonWindow(Action onClick)
+    public FloatingButtonWindow(Action onStar, Action onBolt)
     {
-        var t = Theme.Detect();
-        Width = BtnDip; Height = BtnDip;
         WindowStyle = WindowStyle.None;
         AllowsTransparency = true;
         Background = System.Windows.Media.Brushes.Transparent;
@@ -196,6 +208,29 @@ public sealed class FloatingButtonWindow : Window
         ShowActivated = false;
         ResizeMode = ResizeMode.NoResize;
 
+        // Two chips side by side in a single window: ✦ opens the popup, ⚡ runs the
+        // hands-free instant-replace. One window keeps a single z-order/positioning
+        // pass and one auto-hide/fade for both. The transparent gap between the
+        // rounded pills makes them read as two separate buttons.
+        _star = MakeChip("✦", onStar, out _starGlyph);
+        _star.Margin = new Thickness(0, 0, GapDip, 0);
+        _bolt = MakeChip("⚡", onBolt, out _boltGlyph);
+        _row = new StackPanel
+        {
+            Orientation = Orientation.Horizontal,
+            RenderTransformOrigin = new Point(0.5, 0.5),
+            RenderTransform = _scale,
+        };
+        _row.Children.Add(_star);
+        _row.Children.Add(_bolt);
+        Content = _row;
+
+        _autoHide.Tick += (_, _) => { _autoHide.Stop(); HideButton(); };
+    }
+
+    private static Border MakeChip(string glyph, Action onClick, out TextBlock glyphBlock)
+    {
+        var t = Theme.Detect();
         var border = new Border
         {
             // corner-radius = height/2 for a pill/circle. WPF does NOT clamp
@@ -206,22 +241,20 @@ public sealed class FloatingButtonWindow : Window
             BorderBrush = t.LineStrong,
             BorderThickness = new Thickness(1),
             Cursor = Cursors.Hand,
-            Child = _glyph = new TextBlock
+            Width = BtnDip,
+            Height = BtnDip,
+            // ⚡ styled exactly like ✦ — glyph in the accent/text colour, same surface
+            Child = glyphBlock = new TextBlock
             {
-                Text = "✦",
-                FontSize = BtnDip * 0.43,   // ~13 at size 30; scales with the button
+                Text = glyph,
+                FontSize = BtnDip * 0.43,   // ~13 at size 30; scales with the chip
                 Foreground = t.Accent,
                 HorizontalAlignment = HorizontalAlignment.Center,
                 VerticalAlignment = VerticalAlignment.Center,
             },
         };
         border.MouseLeftButtonUp += (_, e) => { e.Handled = true; onClick(); };
-        border.RenderTransformOrigin = new Point(0.5, 0.5);
-        border.RenderTransform = _scale;
-        _border = border;
-        Content = border;
-
-        _autoHide.Tick += (_, _) => { _autoHide.Stop(); HideButton(); };
+        return border;
     }
 
     protected override void OnSourceInitialized(EventArgs e)
@@ -236,33 +269,41 @@ public sealed class FloatingButtonWindow : Window
     {
         // pick up the current configured size before realizing/placing the window
         double dip = BtnDip;
-        Width = dip; Height = dip;
-        // corner-radius = height/2 keeps it a perfect circle (WPF won't clamp an
-        // oversized radius like CSS, so it must track the live size, not a const).
-        _border.CornerRadius = new CornerRadius(dip / 2);
-        _glyph.FontSize = dip * 0.43;
+        double gap = GapDip;
+        double rowDip = dip * 2 + gap;
+        // corner-radius = height/2 keeps each chip a perfect circle (WPF won't clamp
+        // an oversized radius like CSS, so it must track the live size, not a const).
+        foreach (var (chip, gl) in new[] { (_star, _starGlyph), (_bolt, _boltGlyph) })
+        {
+            chip.Width = chip.Height = dip;
+            chip.CornerRadius = new CornerRadius(dip / 2);
+            gl.FontSize = dip * 0.43;
+        }
+        _star.Margin = new Thickness(0, 0, gap, 0);
+        Width = rowDip; Height = dip;
 
         if (!IsVisible) Show(); // realize the HWND
         var h = new WindowInteropHelper(this).Handle;
         // Size and offsets in device px, scaled to the target monitor's DPI so the
-        // button is the same physical size on every screen. Flip below the cursor
+        // chips are the same physical size on every screen. Flip below the cursor
         // if too close to the top. A window shown without activation isn't raised —
         // HWND_TOPMOST pins it above the foreground app without stealing focus.
         uint dpi = ScreenUtil.DpiForPoint(screenX, screenY);
         double s = dpi / 96.0;
-        int size = (int)Math.Round(dip * s);
+        int w = (int)Math.Round(rowDip * s);
+        int hgt = (int)Math.Round(dip * s);
         int x = screenX + (int)Math.Round(16 * s);
         int y = screenY - (int)Math.Round(46 * s);
         if (y < (int)Math.Round(4 * s)) y = screenY + (int)Math.Round(20 * s);
-        SetWindowPos(h, HWND_TOPMOST, x, y, size, size, SWP_NOACTIVATE | SWP_SHOWWINDOW);
+        SetWindowPos(h, HWND_TOPMOST, x, y, w, hgt, SWP_NOACTIVATE | SWP_SHOWWINDOW);
 
         // fade + scale in (~120ms). Cancels any in-flight hide.
         _hiding = false;
         var d = new Duration(TimeSpan.FromMilliseconds(120));
         var ease = new QuadraticEase { EasingMode = EasingMode.EaseOut };
-        _border.Opacity = 0;
+        _row.Opacity = 0;
         _scale.ScaleX = _scale.ScaleY = 0.8;
-        _border.BeginAnimation(OpacityProperty, new DoubleAnimation(0, 1, d) { EasingFunction = ease });
+        _row.BeginAnimation(OpacityProperty, new DoubleAnimation(0, 1, d) { EasingFunction = ease });
         _scale.BeginAnimation(ScaleTransform.ScaleXProperty, new DoubleAnimation(0.8, 1, d) { EasingFunction = ease });
         _scale.BeginAnimation(ScaleTransform.ScaleYProperty, new DoubleAnimation(0.8, 1, d) { EasingFunction = ease });
 
@@ -284,13 +325,13 @@ public sealed class FloatingButtonWindow : Window
             if (!_hiding) return;   // a re-show raced us — keep it visible
             _hiding = false;
             Hide();
-            _border.BeginAnimation(OpacityProperty, null);
-            _border.Opacity = 1;
+            _row.BeginAnimation(OpacityProperty, null);
+            _row.Opacity = 1;
             _scale.ScaleX = _scale.ScaleY = 1;
         };
         _scale.BeginAnimation(ScaleTransform.ScaleXProperty, new DoubleAnimation(0.9, d) { EasingFunction = ease });
         _scale.BeginAnimation(ScaleTransform.ScaleYProperty, new DoubleAnimation(0.9, d) { EasingFunction = ease });
-        _border.BeginAnimation(OpacityProperty, fade);
+        _row.BeginAnimation(OpacityProperty, fade);
     }
 
     [DllImport("user32.dll")] private static extern bool GetWindowRect(IntPtr hWnd, out RECT rect);

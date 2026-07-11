@@ -56,7 +56,6 @@ public sealed class AppController : IDisposable
     private readonly HotkeyWindow _hotkey;
     private readonly SelectionWatcher _watcher;
     private PopupWindow? _popup;
-    private WF.ToolStripMenuItem? _autoReplaceItem;
     // in-flight hands-free generation (null when idle) + its progress chip
     private CancellationTokenSource? _autoCts;
     private ProgressChipWindow? _autoChip;
@@ -75,20 +74,6 @@ public sealed class AppController : IDisposable
         var menu = new WF.ContextMenuStrip();
         menu.Items.Add("Test Popup", null, (_, _) => ShowPopup(Program.SampleText, IntPtr.Zero));
         menu.Items.Add("Settings…", null, (_, _) => OpenSettings());
-        var autoReplaceItem = new WF.ToolStripMenuItem("Auto-replace first variant")
-        {
-            CheckOnClick = true,
-            Checked = Settings.Current.AutoReplace,
-        };
-        autoReplaceItem.CheckedChanged += (_, _) =>
-        {
-            if (Settings.Current.AutoReplace == autoReplaceItem.Checked) return;
-            Settings.Current.AutoReplace = autoReplaceItem.Checked;
-            Settings.Current.Save();
-            Log.Write($"autoreplace toggled {(autoReplaceItem.Checked ? "ON" : "OFF")} (tray)");
-        };
-        menu.Items.Add(autoReplaceItem);
-        _autoReplaceItem = autoReplaceItem;
         menu.Items.Add("Check for Updates…", null, (_, _) => OpenSettings());
         menu.Items.Add("Test ✦ Button", null, (_, _) =>
         {
@@ -107,9 +92,13 @@ public sealed class AppController : IDisposable
         });
         _tray.ContextMenuStrip = menu;
 
-        _hotkey = new HotkeyWindow(OnHotkey);
+        // Two global hotkeys + two floating chips feed two entry points:
+        //   main    → open the popup (Ctrl+Shift+E / ✦ chip)
+        //   instant → hands-free auto-replace (Ctrl+Shift+R / ⚡ chip)
+        _hotkey = new HotkeyWindow(OnMainTrigger, () => OnInstantTrigger("hotkey"));
         _watcher = new SelectionWatcher(
-            OnHotkey,
+            OnMainTrigger,
+            () => OnInstantTrigger("chip"),
             () => _popup != null,
             () => _popup?.IsAutoMode == true,
             (text, hwnd) => _popup?.UpdateSource(text, hwnd));
@@ -121,33 +110,13 @@ public sealed class AppController : IDisposable
         _tray.Text = TrayTip();
     }
 
-    // keep the tray checkmark in sync after the Settings window saves
-    public void SyncAutoReplaceMenu()
-    {
-        if (_autoReplaceItem != null) _autoReplaceItem.Checked = Settings.Current.AutoReplace;
-    }
-
     private static string TrayTip() =>
         $"Cleanup {Updater.DisplayVersion} — {Settings.Current.HotkeyDisplay} on selected text";
 
-    private async void OnHotkey()
+    // Main trigger (Ctrl+Shift+E hotkey / ✦ chip): capture → open the popup.
+    private async void OnMainTrigger()
     {
-        Log.Write("trigger fired");
-        // A second trigger while a hands-free generation is in flight cancels it.
-        if (_autoCts != null)
-        {
-            Log.Write("autoreplace: cancelled by second trigger");
-            _autoCts.Cancel();
-            HideAutoChip();
-            return;
-        }
-        // Hands-free path: bypass the popup entirely.
-        if (Settings.Current.AutoReplace)
-        {
-            _popup?.SafeClose();   // don't let a stray popup fight over the clipboard
-            await AutoReplace();
-            return;
-        }
+        Log.Write("trigger fired (main)");
         if (_popup != null) return;
         // Warm DNS+TCP+TLS to the active remote backend now, in parallel with the
         // capture below, so the first variant skips the cold handshake. No-op for
@@ -168,11 +137,29 @@ public sealed class AppController : IDisposable
         Log.Write($"capture→popup-shown {sw.ElapsedMilliseconds}ms");
     }
 
+    // Instant trigger (Ctrl+Shift+R hotkey / ⚡ chip): hands-free auto-replace.
+    // Works regardless of popup state — a stray popup is closed first so they
+    // don't fight over the clipboard. A second instant trigger while a generation
+    // is in flight cancels it.
+    private async void OnInstantTrigger(string source)
+    {
+        Log.Write($"trigger fired (instant, {source})");
+        if (_autoCts != null)
+        {
+            Log.Write($"autoreplace: cancelled by second trigger ({source})");
+            _autoCts.Cancel();
+            HideAutoChip();
+            return;
+        }
+        _popup?.SafeClose();
+        await AutoReplace(source);
+    }
+
     // Hands-free: capture → generate ONE balanced variant (no popup, no streaming)
     // → paste straight back over the selection. On any failure (LLM error, empty
     // result) fall back to the normal popup, which surfaces errors well. An empty
     // capture just beeps (there's nothing to rewrite or fall back to).
-    private async Task AutoReplace()
+    private async Task AutoReplace(string source)
     {
         var cts = new CancellationTokenSource();
         _autoCts = cts;
@@ -192,7 +179,7 @@ public sealed class AppController : IDisposable
             if (cts.IsCancellationRequested) return;
 
             ShowAutoChip(anchor);
-            Log.Write($"autoreplace: start len={text.Length} backend={Settings.Current.Backend}");
+            Log.Write($"autoreplace: start src={source} len={text.Length} backend={Settings.Current.Backend}");
 
             string result;
             try
@@ -284,51 +271,67 @@ public sealed class AppController : IDisposable
     }
 }
 
-// Hidden message-only window that owns the global Ctrl+Shift+E hotkey.
+// Hidden message-only window that owns the two global hotkeys: the main popup
+// trigger (id 1, Ctrl+Shift+E) and the instant auto-replace trigger (id 2,
+// Ctrl+Shift+R). Both are re-registered together whenever Settings changes.
 public sealed class HotkeyWindow : WF.NativeWindow, IDisposable
 {
     private const int WM_HOTKEY = 0x0312;
-    private readonly Action _callback;
+    private const int MainId = 1, InstantId = 2;
+    private readonly Action _onMain;
+    private readonly Action _onInstant;
 
     [System.Runtime.InteropServices.DllImport("user32.dll")]
     private static extern bool RegisterHotKey(IntPtr hWnd, int id, uint fsModifiers, uint vk);
     [System.Runtime.InteropServices.DllImport("user32.dll")]
     private static extern bool UnregisterHotKey(IntPtr hWnd, int id);
 
-    public HotkeyWindow(Action callback)
+    public HotkeyWindow(Action onMain, Action onInstant)
     {
-        _callback = callback;
+        _onMain = onMain;
+        _onInstant = onInstant;
         CreateHandle(new WF.CreateParams());
         Reregister();
     }
 
     public void Reregister()
     {
-        UnregisterHotKey(Handle, 1);
         var s = Settings.Current;
-        if (RegisterHotKey(Handle, 1, s.HotkeyModifiers, s.HotkeyKey))
+        Register(MainId, s.HotkeyModifiers, s.HotkeyKey, s.HotkeyDisplay, "popup");
+        Register(InstantId, s.HotkeyModifiers2, s.HotkeyKey2, s.HotkeyDisplay2, "instant");
+    }
+
+    private void Register(int id, uint mods, uint vk, string display, string what)
+    {
+        UnregisterHotKey(Handle, id);
+        if (RegisterHotKey(Handle, id, mods, vk))
         {
-            Log.Write($"hotkey {s.HotkeyDisplay} registered");
+            Log.Write($"{what} hotkey {display} registered");
         }
         else
         {
-            Log.Write($"hotkey {s.HotkeyDisplay} FAILED to register — another app owns it");
+            Log.Write($"{what} hotkey {display} FAILED to register — another app owns it");
             WF.MessageBox.Show(
-                $"Another app already owns {s.HotkeyDisplay}, so the Cleanup hotkey won't work.\n" +
-                "Pick a different hotkey in Settings, or use the floating ✦ button.",
+                $"Another app already owns {display}, so the Cleanup {what} hotkey won't work.\n" +
+                "Pick a different hotkey in Settings, or use the floating buttons.",
                 "Cleanup");
         }
     }
 
     protected override void WndProc(ref WF.Message m)
     {
-        if (m.Msg == WM_HOTKEY) _callback();
+        if (m.Msg == WM_HOTKEY)
+        {
+            if (m.WParam.ToInt32() == InstantId) _onInstant();
+            else _onMain();
+        }
         base.WndProc(ref m);
     }
 
     public void Dispose()
     {
-        UnregisterHotKey(Handle, 1);
+        UnregisterHotKey(Handle, MainId);
+        UnregisterHotKey(Handle, InstantId);
         DestroyHandle();
     }
 }
