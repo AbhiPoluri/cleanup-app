@@ -31,12 +31,19 @@ public partial class SettingsWindow : Window
         foreach (var e in new[] { "low", "medium", "high" }) ChatgptEffortBox.Items.Add(new ComboBoxItem { Content = e });
         SelectByContent(ChatgptEffortBox, s.ChatgptEffort);
         if (ChatgptEffortBox.SelectedIndex < 0) ChatgptEffortBox.SelectedIndex = 0;
+        foreach (var m in new[] { "haiku", "sonnet", "opus" }) ClaudeModelBox.Items.Add(m);
+        ClaudeModelBox.Text = s.ClaudeModel;
+        ClaudeStatusLabel.Text = "Checking for the Claude Code CLI…";
         ApiBaseBox.Text = s.ApiBase;
         ApiKeyBox.Password = s.ApiKey;
         ApiModelBox.Text = s.ApiModel;
         SelectByContent(ToneBox, s.DefaultTone);
         SelectByContent(CountBox, s.DefaultCount.ToString());
         FloatingButtonCheck.IsChecked = s.FloatingButton;
+        ChipStarCheck.IsChecked = s.ChipStar;
+        ChipBoltCheck.IsChecked = s.ChipBolt;
+        ChipAgentCheck.IsChecked = s.ChipAgent;
+        ChipTogglesPanel.IsEnabled = s.FloatingButton;   // grey the per-chip toggles when the master is off
         AutoCloseCheck.IsChecked = s.AutoClose;
         ButtonSizeSlider.Value = Math.Clamp(s.FloatingButtonSize, 22, 48);
         FontSizeSlider.Value = Math.Clamp(s.FontSize, 11, 18);
@@ -47,8 +54,100 @@ public partial class SettingsWindow : Window
         CodexStatusLabel.Text = Llm.CodexStatus();
         VersionLabel.Text = Updater.IsDevBuild ? "dev build — update check only" : Updater.DisplayVersion;
 
+        // ---- Agent mode section ----
+        _agentLoading = true;          // suppress the change handler while wiring initial state
+        _agentClaudeModel = s.AgentClaudeModel;
+        _agentCodexModel = s.AgentCodexModel;
+        _agentEngineSel = s.ResolvedAgentEngine;
+        SelectByTag(AgentEngineBox, _agentEngineSel);
+        SelectByTag(AgentPermBox, s.AgentPermission);
+        if (AgentPermBox.SelectedIndex < 0) AgentPermBox.SelectedIndex = 0;
+        RepopulateAgentModels();       // fill the model box for the selected engine
+        UpdateAgentWarn();
+        _agentLoading = false;
+
         UpdatePanels();
         _ = LoadOllamaModels();
+        _ = LoadClaudeStatus();
+        _ = RefreshAgentStatus();
+    }
+
+    // ---- Agent mode ----
+    // Per-engine model kept locally so switching engines in the UI never carries a
+    // wrong model id across; persisted to the matching field on Save.
+    private string _agentClaudeModel = Settings.Current.AgentClaudeModel;
+    private string _agentCodexModel = Settings.Current.AgentCodexModel;
+    private string _agentEngineSel = Settings.Current.ResolvedAgentEngine;
+    private bool _agentLoading;
+
+    private string SelectedAgentEngine =>
+        (string)((ComboBoxItem?)AgentEngineBox.SelectedItem)?.Tag! ?? "codex";
+    private string SelectedAgentPerm =>
+        (string)((ComboBoxItem?)AgentPermBox.SelectedItem)?.Tag! ?? "safe";
+
+    private void AgentEngine_Changed(object sender, SelectionChangedEventArgs e)
+    {
+        if (AgentModelBox == null || _agentLoading) return;   // fires during InitializeComponent / initial load
+        // remember the model typed for the previously-selected engine before swapping
+        StashAgentModel(_agentEngineSel);
+        _agentEngineSel = SelectedAgentEngine;
+        RepopulateAgentModels();
+        _ = RefreshAgentStatus();
+    }
+
+    private void AgentPerm_Changed(object sender, SelectionChangedEventArgs e) => UpdateAgentWarn();
+
+    private void StashAgentModel(string engine)
+    {
+        var v = AgentModelBox.Text.Trim();
+        if (engine == "claude") _agentClaudeModel = v.Length > 0 ? v : "sonnet";
+        else _agentCodexModel = v.Length > 0 ? v : "gpt-5.5";
+    }
+
+    private void RepopulateAgentModels()
+    {
+        AgentModelBox.Items.Clear();
+        if (SelectedAgentEngine == "claude")
+        {
+            foreach (var m in new[] { "haiku", "sonnet", "opus" }) AgentModelBox.Items.Add(m);
+            AgentModelBox.Text = _agentClaudeModel;
+        }
+        else
+        {
+            foreach (var m in Llm.ChatgptModels) AgentModelBox.Items.Add(m);
+            AgentModelBox.Text = _agentCodexModel;
+        }
+    }
+
+    private void UpdateAgentWarn()
+    {
+        if (AgentWarnLabel != null)
+            AgentWarnLabel.Visibility = SelectedAgentPerm == "full" ? Visibility.Visible : Visibility.Collapsed;
+    }
+
+    // CLI availability + login status for the selected agent engine.
+    private async System.Threading.Tasks.Task RefreshAgentStatus()
+    {
+        if (AgentStatusLabel == null) return;
+        try
+        {
+            if (SelectedAgentEngine == "codex")
+                AgentStatusLabel.Text = Llm.ResolveCodexCli() == null
+                    ? "Codex CLI not found — npm i -g @openai/codex, then run `codex login`"
+                    : Llm.CodexStatus();
+            else
+            {
+                AgentStatusLabel.Text = "Checking for the Claude Code CLI…";
+                AgentStatusLabel.Text = await Llm.ClaudeStatus();
+            }
+        }
+        catch { AgentStatusLabel.Text = "Could not check the agent CLI"; }
+    }
+
+    private async System.Threading.Tasks.Task LoadClaudeStatus()
+    {
+        try { ClaudeStatusLabel.Text = await Llm.ClaudeStatus(); }
+        catch { ClaudeStatusLabel.Text = "Could not check the Claude Code CLI"; }
     }
 
     private UpdateInfo? _pendingUpdate;
@@ -194,12 +293,20 @@ public partial class SettingsWindow : Window
         store((uint)mods, (uint)KeyInterop.VirtualKeyFromKey(key), display);
     }
 
+    // Master toggle drives the per-chip toggles' enabled state (greyed when off).
+    private void FloatingButton_Changed(object sender, RoutedEventArgs e)
+    {
+        if (ChipTogglesPanel != null)
+            ChipTogglesPanel.IsEnabled = FloatingButtonCheck.IsChecked == true;
+    }
+
     private void UpdatePanels()
     {
         if (OllamaPanel == null) return; // fires during InitializeComponent
         var b = SelectedBackend;
         OllamaPanel.Visibility = b == "ollama" ? Visibility.Visible : Visibility.Collapsed;
         ChatgptPanel.Visibility = b == "chatgpt" ? Visibility.Visible : Visibility.Collapsed;
+        ClaudePanel.Visibility = b == "claude" ? Visibility.Visible : Visibility.Collapsed;
         OpenaiPanel.Visibility = b == "openai" ? Visibility.Visible : Visibility.Collapsed;
     }
 
@@ -211,12 +318,23 @@ public partial class SettingsWindow : Window
         s.OllamaModel = OllamaModelBox.Text.Trim();
         s.ChatgptModel = ((ChatgptModelBox.SelectedItem as ComboBoxItem)?.Content as string) ?? "gpt-5.5";
         s.ChatgptEffort = ((ChatgptEffortBox.SelectedItem as ComboBoxItem)?.Content as string) ?? "low";
+        var claudeModel = ClaudeModelBox.Text.Trim();
+        s.ClaudeModel = claudeModel.Length > 0 ? claudeModel : "haiku";
         s.ApiBase = ApiBaseBox.Text.Trim();
         s.ApiKey = ApiKeyBox.Password;
         s.ApiModel = ApiModelBox.Text.Trim();
         s.DefaultTone = ((ToneBox.SelectedItem as ComboBoxItem)?.Content as string) ?? "Clean";
         s.DefaultCount = int.TryParse((CountBox.SelectedItem as ComboBoxItem)?.Content as string, out var n) ? n : 3;
+        // agent mode (independent of the rewrite backend)
+        StashAgentModel(SelectedAgentEngine);   // capture the current box into its engine slot
+        s.AgentEngine = SelectedAgentEngine;
+        s.AgentClaudeModel = _agentClaudeModel;
+        s.AgentCodexModel = _agentCodexModel;
+        s.AgentPermission = SelectedAgentPerm;
         s.FloatingButton = FloatingButtonCheck.IsChecked == true;
+        s.ChipStar = ChipStarCheck.IsChecked == true;
+        s.ChipBolt = ChipBoltCheck.IsChecked == true;
+        s.ChipAgent = ChipAgentCheck.IsChecked == true;
         s.AutoClose = AutoCloseCheck.IsChecked == true;
         s.FloatingButtonSize = Math.Round(ButtonSizeSlider.Value);
         s.FontSize = Math.Round(FontSizeSlider.Value);

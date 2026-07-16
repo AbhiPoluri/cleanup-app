@@ -17,4 +17,11 @@
     <!-- allows compiling this project on macOS/Linux for CI/verification -->
     <EnableWindowsTargeting>true</EnableWindowsTargeting>
   </PropertyGroup>
+
+  <ItemGroup>
+    <!-- voice input for Agent mode (SpeechRecognitionEngine + DictationGrammar).
+         Microsoft-owned; Windows-only at runtime (init is wrapped so a missing
+         mic/recognizer just disables the mic button). -->
+    <PackageReference Include="System.Speech" Version="8.0.0" />
+  </ItemGroup>
 </Project>

@@ -166,6 +166,7 @@ public static class Llm
         try
         {
             var s = Settings.Current;
+            if (s.Backend == "claude") return;                                   // CLI backend: no URL to warm
             var uri = ActiveBackendUri(s);
             if (uri.IsLoopback) return;                                          // local: no handshake to save
             if (DateTime.UtcNow - _lastRequestUtc < TimeSpan.FromSeconds(60)) return; // pool still warm
@@ -201,6 +202,7 @@ public static class Llm
         {
             "openai" => await OpenAi(s, system, user, variant, ct, onPartial),
             "chatgpt" => await ChatGpt(s, system, user, variant, ct, onPartial),
+            "claude" => await Claude(s, system, user, variant, ct, onPartial),
             _ => await Ollama(s, system, user, variant, ct, onPartial),
         };
         return Clean(raw);
@@ -531,6 +533,239 @@ public static class Llm
         }
     }
 
+    // Resolved path to the `claude` CLI, cached on first success. Only successful
+    // resolutions are cached — a not-found stays null so installing the CLI mid-session
+    // and reopening Settings re-probes without a restart.
+    private static string? _claudeCli;
+
+    // Resolution order: (1) PATH via `where` (claude / claude.cmd / claude.exe),
+    // (2) native install %USERPROFILE%\.local\bin\claude.exe, (3) npm global shim
+    // %APPDATA%\npm\claude.cmd. Returns null if none exist. Internal so the agent
+    // engine can reuse the same discipline for the `claude` tool-enabled agent.
+    internal static string? ResolveClaudeCli()
+    {
+        if (_claudeCli != null && File.Exists(_claudeCli)) return _claudeCli;
+        foreach (var name in new[] { "claude", "claude.cmd", "claude.exe" })
+        {
+            var p = WhereOnPath(name);
+            if (p != null) { _claudeCli = p; return p; }
+        }
+        var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+        var native = Path.Combine(home, ".local", "bin", "claude.exe");
+        if (File.Exists(native)) { _claudeCli = native; return native; }
+        var appData = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
+        var npmShim = Path.Combine(appData, "npm", "claude.cmd");
+        if (File.Exists(npmShim)) { _claudeCli = npmShim; return npmShim; }
+        return null;
+    }
+
+    // Resolved path to the `codex` CLI, cached on first success — the codex agent
+    // engine's equivalent of _claudeCli. Same not-found-stays-null behaviour.
+    private static string? _codexCli;
+
+    // Same resolution order as ResolveClaudeCli but for the `codex` CLI: PATH via
+    // `where`, then %USERPROFILE%\.local\bin\codex.exe, then %APPDATA%\npm\codex.cmd.
+    internal static string? ResolveCodexCli()
+    {
+        if (_codexCli != null && File.Exists(_codexCli)) return _codexCli;
+        foreach (var name in new[] { "codex", "codex.cmd", "codex.exe" })
+        {
+            var p = WhereOnPath(name);
+            if (p != null) { _codexCli = p; return p; }
+        }
+        var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+        var native = Path.Combine(home, ".local", "bin", "codex.exe");
+        if (File.Exists(native)) { _codexCli = native; return native; }
+        var appData = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
+        var npmShim = Path.Combine(appData, "npm", "codex.cmd");
+        if (File.Exists(npmShim)) { _codexCli = npmShim; return npmShim; }
+        return null;
+    }
+
+    // Resolve a command name against PATH via Windows `where`; returns the first
+    // existing hit, or null.
+    private static string? WhereOnPath(string name)
+    {
+        try
+        {
+            using var proc = Process.Start(new ProcessStartInfo("where", name)
+            {
+                UseShellExecute = false,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                CreateNoWindow = true,
+            });
+            if (proc == null) return null;
+            var outp = proc.StandardOutput.ReadToEnd();
+            proc.WaitForExit(3000);
+            foreach (var raw in outp.Split('\n'))
+            {
+                var path = raw.Trim();
+                if (path.Length > 0 && File.Exists(path)) return path;
+            }
+            return null;
+        }
+        catch { return null; }
+    }
+
+    // Point a ProcessStartInfo at the CLI. A .cmd/.bat shim (npm install) can't be
+    // launched directly with UseShellExecute=false, so route it through cmd.exe; a
+    // native claude.exe runs directly and is preferred. cmd.exe re-parses its command
+    // line, so multiline args through the shim are best-effort — native install avoids it.
+    internal static void SetCliTarget(ProcessStartInfo psi, string cli)
+    {
+        if (cli.EndsWith(".cmd", StringComparison.OrdinalIgnoreCase) ||
+            cli.EndsWith(".bat", StringComparison.OrdinalIgnoreCase))
+        {
+            psi.FileName = "cmd.exe";
+            psi.ArgumentList.Add("/c");
+            psi.ArgumentList.Add(cli);
+        }
+        else psi.FileName = cli;
+    }
+
+    // Claude Code subscription via the `claude` CLI in headless print mode. Reuses the
+    // user's Claude Code login — no API key. Streams stream-json JSONL from the child's
+    // stdout: `stream_event` lines wrap Anthropic SSE (content_block_delta → text_delta)
+    // for the live partial; the final `result` line carries the authoritative full text.
+    // Slow option (~8-10s: CLI boot + session setup + API) — streaming softens the wait.
+    private static async Task<string> Claude(
+        Settings s, string system, string user, int v, CancellationToken ct, Action<string>? onPartial = null)
+    {
+        var sw = Stopwatch.StartNew();
+        long ttfb = -1, sseFirst = -1;
+        int events = 0;
+
+        void LogOk() => Log.Write(
+            $"llm ok backend=claude model={s.ClaudeModel} v={v} ttfb={ttfb}ms " +
+            $"body={(ttfb < 0 ? sw.ElapsedMilliseconds : sw.ElapsedMilliseconds - ttfb)}ms " +
+            $"total={sw.ElapsedMilliseconds}ms sse_first={sseFirst}ms events={events}");
+
+        var cli = ResolveClaudeCli()
+            ?? throw new Exception("Claude Code CLI not found — install it and run `claude` once to log in");
+
+        var psi = new ProcessStartInfo
+        {
+            UseShellExecute = false,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            CreateNoWindow = true,
+            StandardOutputEncoding = Encoding.UTF8,
+            StandardErrorEncoding = Encoding.UTF8,
+        };
+        SetCliTarget(psi, cli);
+        // ArgumentList avoids Windows quoting hell — each arg is escaped independently.
+        // --append-system-prompt injects Prompts.System (cleaner than concatenating into
+        // the user prompt); --strict-mcp-config + empty --mcp-config and
+        // disableAllHooks stop the user's MCP servers / hooks from loading (safety + boot time).
+        void Arg(string a) => psi.ArgumentList.Add(a);
+        Arg("-p"); Arg(user);
+        Arg("--model"); Arg(s.ClaudeModel);
+        Arg("--output-format"); Arg("stream-json");
+        Arg("--verbose");
+        Arg("--include-partial-messages");
+        Arg("--append-system-prompt"); Arg(system);
+        Arg("--strict-mcp-config");
+        Arg("--mcp-config"); Arg("{\"mcpServers\":{}}");
+        Arg("--settings"); Arg("{\"disableAllHooks\":true}");
+
+        var proc = new Process { StartInfo = psi };
+        try { proc.Start(); }
+        catch (Exception ex)
+        {
+            proc.Dispose();
+            Log.Write($"llm fail backend=claude model={s.ClaudeModel} v={v} err={ex.Message} total={sw.ElapsedMilliseconds}ms");
+            throw new Exception("Claude Code CLI failed to start — " + ex.Message);
+        }
+
+        // Cancellation kills the entire process tree (the CLI spawns children).
+        using var reg = ct.Register(() => { try { if (!proc.HasExited) proc.Kill(true); } catch { } });
+
+        try
+        {
+            var throttle = new PartialThrottle(onPartial, sw, v);
+            var acc = new StringBuilder();
+            string? finalText = null;
+            // drain stderr concurrently so a full pipe can't deadlock the stdout read
+            var stderrTask = proc.StandardError.ReadToEndAsync(ct);
+
+            string? line;
+            while ((line = await proc.StandardOutput.ReadLineAsync(ct)) != null)
+            {
+                if (ttfb < 0) ttfb = sw.ElapsedMilliseconds;   // first stdout line
+                if (line.Length == 0) continue;
+                JsonDocument ev;
+                try { ev = JsonDocument.Parse(line); }
+                catch { continue; }   // parse defensively — skip non-JSON / partial lines
+                using (ev)
+                {
+                    if (!ev.RootElement.TryGetProperty("type", out var typeEl) ||
+                        typeEl.ValueKind != JsonValueKind.String) continue;
+                    switch (typeEl.GetString())
+                    {
+                        case "stream_event":
+                            // wraps an Anthropic SSE event: content_block_delta → text_delta.text
+                            if (ev.RootElement.TryGetProperty("event", out var evt) &&
+                                evt.TryGetProperty("type", out var et) &&
+                                et.ValueKind == JsonValueKind.String &&
+                                et.GetString() == "content_block_delta" &&
+                                evt.TryGetProperty("delta", out var dl) &&
+                                dl.TryGetProperty("type", out var dt) &&
+                                dt.ValueKind == JsonValueKind.String &&
+                                dt.GetString() == "text_delta" &&
+                                dl.TryGetProperty("text", out var txt) &&
+                                txt.ValueKind == JsonValueKind.String)
+                            {
+                                if (sseFirst < 0) sseFirst = sw.ElapsedMilliseconds;
+                                events++;
+                                var frag = txt.GetString();
+                                if (!string.IsNullOrEmpty(frag)) { acc.Append(frag); throttle.Offer(acc); }
+                            }
+                            break;
+                        case "result":
+                            // final line — authoritative full text unless flagged as an error
+                            if (ev.RootElement.TryGetProperty("result", out var rEl) &&
+                                rEl.ValueKind == JsonValueKind.String)
+                                finalText = rEl.GetString();
+                            if (ev.RootElement.TryGetProperty("is_error", out var isErr) &&
+                                isErr.ValueKind == JsonValueKind.True)
+                                finalText = null;   // error result → fall through to stderr handling
+                            break;
+                    }
+                }
+            }
+
+            await proc.WaitForExitAsync(ct);
+            var result = !string.IsNullOrEmpty(finalText) ? finalText! : acc.ToString();
+
+            if (proc.ExitCode != 0 || result.Length == 0)
+            {
+                string stderr = "";
+                try { stderr = await stderrTask; } catch { }
+                var tail = (stderr ?? "").Trim();
+                if (tail.Length > 300) tail = "…" + tail[^300..];
+                var reason = tail.Length > 0 ? tail
+                    : (proc.ExitCode != 0 ? $"exit {proc.ExitCode}" : "empty response");
+                throw new Exception("Claude CLI: " + reason);
+            }
+
+            LogOk();
+            return result;
+        }
+        catch (OperationCanceledException) { throw; }
+        catch (Exception ex)
+        {
+            Log.Write($"llm fail backend=claude model={s.ClaudeModel} v={v} err={ex.Message} " +
+                      $"ttfb={ttfb}ms sse_first={sseFirst}ms events={events} total={sw.ElapsedMilliseconds}ms");
+            throw;
+        }
+        finally
+        {
+            try { if (!proc.HasExited) proc.Kill(true); } catch { }
+            proc.Dispose();
+        }
+    }
+
     private static string Clean(string s)
     {
         var t = s.Trim();
@@ -568,6 +803,46 @@ public static class Llm
         catch
         {
             return "Could not read Codex login — run `codex login` in a terminal";
+        }
+    }
+
+    // `claude --version` output, cached after the first successful read.
+    private static string? _claudeVersion;
+
+    // Claude Code CLI status for the settings window. Async: locating the CLI and
+    // reading its version shell out, so this must not block the UI thread.
+    public static async Task<string> ClaudeStatus()
+    {
+        var cli = ResolveClaudeCli();
+        if (cli == null)
+            return "Not connected — install Claude Code (npm i -g @anthropic-ai/claude-code, " +
+                   "or the native installer), then run `claude` once to log in";
+        if (_claudeVersion != null)
+            return $"Found ({_claudeVersion}) — using your Claude Code login, no API key";
+        try
+        {
+            var psi = new ProcessStartInfo
+            {
+                UseShellExecute = false,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                CreateNoWindow = true,
+                StandardOutputEncoding = Encoding.UTF8,
+            };
+            SetCliTarget(psi, cli);
+            psi.ArgumentList.Add("--version");
+            using var proc = Process.Start(psi);
+            if (proc == null) return $"Found at {cli} — couldn't read version";
+            var outp = (await proc.StandardOutput.ReadToEndAsync()).Trim();
+            await proc.WaitForExitAsync();
+            if (outp.Length > 0) _claudeVersion = outp;
+            return _claudeVersion != null
+                ? $"Found ({_claudeVersion}) — using your Claude Code login, no API key"
+                : $"Found at {cli} — using your Claude Code login, no API key";
+        }
+        catch
+        {
+            return $"Found at {cli} — using your Claude Code login (couldn't read version)";
         }
     }
 }

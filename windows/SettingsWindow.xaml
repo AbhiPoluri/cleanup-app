@@ -13,6 +13,7 @@
       <ComboBox x:Name="BackendBox" Grid.Column="1" SelectionChanged="Backend_Changed">
         <ComboBoxItem Tag="ollama">Ollama (local)</ComboBoxItem>
         <ComboBoxItem Tag="chatgpt">ChatGPT subscription (Codex login)</ComboBoxItem>
+        <ComboBoxItem Tag="claude">Claude subscription (Claude Code login)</ComboBoxItem>
         <ComboBoxItem Tag="openai">OpenAI-compatible API</ComboBoxItem>
       </ComboBox>
     </Grid>
@@ -60,6 +61,22 @@
       </Border>
     </StackPanel>
 
+    <StackPanel x:Name="ClaudePanel">
+      <Grid Margin="0,0,0,8">
+        <Grid.ColumnDefinitions>
+          <ColumnDefinition Width="110"/>
+          <ColumnDefinition Width="*"/>
+        </Grid.ColumnDefinitions>
+        <TextBlock Text="Model" VerticalAlignment="Center"/>
+        <ComboBox x:Name="ClaudeModelBox" Grid.Column="1" IsEditable="True"/>
+      </Grid>
+      <TextBlock FontSize="11" Opacity="0.55" TextWrapping="Wrap" Margin="0,0,0,8"
+                 Text="Uses your Claude Code subscription — no API key. Slower than API backends (~8-10s per rewrite; streaming softens it)."/>
+      <Border Background="#14000000" CornerRadius="6" Padding="10" Margin="0,0,0,8">
+        <TextBlock x:Name="ClaudeStatusLabel" FontSize="11.5" TextWrapping="Wrap"/>
+      </Border>
+    </StackPanel>
+
     <StackPanel x:Name="OpenaiPanel">
       <Grid Margin="0,0,0,8">
         <Grid.ColumnDefinitions>
@@ -88,6 +105,50 @@
       <TextBlock FontSize="11" Opacity="0.55" TextWrapping="Wrap" Margin="0,0,0,8"
                  Text="OpenRouter: base https://openrouter.ai/api/v1, model needs a vendor prefix (e.g. openai/gpt-4o-mini). OpenAI: base https://api.openai.com."/>
     </StackPanel>
+
+    <Separator Margin="0,8"/>
+
+    <!-- Agent mode: independent of the rewrite backend above -->
+    <TextBlock Text="Agent mode" FontWeight="SemiBold" Margin="0,4,0,8"/>
+    <Grid Margin="0,0,0,8">
+      <Grid.ColumnDefinitions>
+        <ColumnDefinition Width="110"/>
+        <ColumnDefinition Width="*"/>
+      </Grid.ColumnDefinitions>
+      <TextBlock Text="Engine" VerticalAlignment="Center"/>
+      <ComboBox x:Name="AgentEngineBox" Grid.Column="1" SelectionChanged="AgentEngine_Changed">
+        <ComboBoxItem Tag="codex">Codex (ChatGPT login)</ComboBoxItem>
+        <ComboBoxItem Tag="claude">Claude (Claude Code login)</ComboBoxItem>
+      </ComboBox>
+    </Grid>
+    <TextBlock FontSize="11" Opacity="0.55" TextWrapping="Wrap" Margin="0,0,0,8"
+               Text="More engines coming soon (Ollama, API keys)."/>
+    <Grid Margin="0,0,0,8">
+      <Grid.ColumnDefinitions>
+        <ColumnDefinition Width="110"/>
+        <ColumnDefinition Width="*"/>
+      </Grid.ColumnDefinitions>
+      <TextBlock Text="Model" VerticalAlignment="Center"/>
+      <ComboBox x:Name="AgentModelBox" Grid.Column="1" IsEditable="True"/>
+    </Grid>
+    <Grid Margin="0,0,0,8">
+      <Grid.ColumnDefinitions>
+        <ColumnDefinition Width="110"/>
+        <ColumnDefinition Width="*"/>
+      </Grid.ColumnDefinitions>
+      <TextBlock Text="Permissions" VerticalAlignment="Center"/>
+      <ComboBox x:Name="AgentPermBox" Grid.Column="1" SelectionChanged="AgentPerm_Changed">
+        <ComboBoxItem Tag="safe">Safe — read &amp; analyze only</ComboBoxItem>
+        <ComboBoxItem Tag="standard">Standard — can edit files</ComboBoxItem>
+        <ComboBoxItem Tag="full">Full — no sandbox (dangerous)</ComboBoxItem>
+      </ComboBox>
+    </Grid>
+    <TextBlock x:Name="AgentWarnLabel" FontSize="11.5" FontWeight="SemiBold" TextWrapping="Wrap"
+               Margin="0,0,0,8" Visibility="Collapsed"
+               Text="Full gives the agent unrestricted access to your machine. Use only when you trust the task."/>
+    <Border Background="#14000000" CornerRadius="6" Padding="10" Margin="0,0,0,8">
+      <TextBlock x:Name="AgentStatusLabel" FontSize="11.5" TextWrapping="Wrap"/>
+    </Border>
 
     <Separator Margin="0,8"/>
 
@@ -139,8 +200,18 @@
                PreviewKeyDown="Hotkey2_KeyDown" GotFocus="Hotkey2_GotFocus"/>
     </Grid>
 
-    <CheckBox x:Name="FloatingButtonCheck" Margin="0,0,0,8"
-              Content="Show ✦ / ⚡ buttons when I select text with the mouse"/>
+    <CheckBox x:Name="FloatingButtonCheck" Margin="0,0,0,6"
+              Content="Show buttons when I select text with the mouse"
+              Checked="FloatingButton_Changed" Unchecked="FloatingButton_Changed"/>
+    <!-- Per-chip toggles; the whole panel greys out when the master is unchecked. -->
+    <StackPanel x:Name="ChipTogglesPanel" Margin="18,0,0,8">
+      <CheckBox x:Name="ChipStarCheck" Margin="0,0,0,4"
+                Content="✦ Clean up (opens the popup)"/>
+      <CheckBox x:Name="ChipBoltCheck" Margin="0,0,0,4"
+                Content="⚡ Instant rewrite"/>
+      <CheckBox x:Name="ChipAgentCheck"
+                Content="🤖 Agent mode"/>
+    </StackPanel>
 
     <Grid Margin="0,0,0,8">
       <Grid.ColumnDefinitions>

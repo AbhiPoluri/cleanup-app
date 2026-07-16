@@ -589,7 +589,7 @@ public partial class PopupWindow : Window
         for (int i = 0; i < _count; i++)
         {
             int idx = i;
-            var card = new VariantCard(idx, _t, SelectCard, _fontSize);
+            var card = new VariantCard(idx, _t, SelectCard, _fontSize, OnCardVersionChanged);
             card.EnterFresh();
             card.SetSelected(idx == 0, animate: false);
             _cards.Add(card);
@@ -736,6 +736,15 @@ public partial class PopupWindow : Window
         RefreshDiffs();
     }
 
+    // A card stepped to a different version: sync its displayed text into _results
+    // so Copy/Replace/refine use it, and re-render the diff if it's the selected card.
+    private void OnCardVersionChanged(int idx)
+    {
+        if (idx < 0 || idx >= _cards.Count || idx >= _results.Length) return;
+        _results[idx] = _cards[idx].CurrentText;
+        if (idx == _selected) RefreshDiffs();
+    }
+
     // ---------- actions ----------
 
     // ---------- lifecycle animation ----------
@@ -808,6 +817,15 @@ public partial class PopupWindow : Window
             case Key.D: SetDiff(!_diffOn); e.Handled = true; break;
             case >= Key.D1 and <= Key.D5:
                 SelectCard(e.Key - Key.D1); e.Handled = true; break;
+            // Ctrl+←/→ steps the selected card's version history — but only when no
+            // text box owns focus, so it never hijacks word-wise caret movement in
+            // the refine / custom-tone inputs.
+            case Key.Left when Keyboard.FocusedElement is not TextBoxBase:
+                if (_selected < _cards.Count) _cards[_selected].Step(-1);
+                e.Handled = true; break;
+            case Key.Right when Keyboard.FocusedElement is not TextBoxBase:
+                if (_selected < _cards.Count) _cards[_selected].Step(1);
+                e.Handled = true; break;
         }
     }
 

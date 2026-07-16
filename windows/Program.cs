@@ -55,7 +55,10 @@ public sealed class AppController : IDisposable
     private readonly WF.NotifyIcon _tray;
     private readonly HotkeyWindow _hotkey;
     private readonly SelectionWatcher _watcher;
+    private readonly WF.ToolStripMenuItem _agentItem;
     private PopupWindow? _popup;
+    // open agent windows — each owns its own CLI session; killed on app exit
+    private readonly System.Collections.Generic.List<AgentWindow> _agents = new();
     // in-flight hands-free generation (null when idle) + its progress chip
     private CancellationTokenSource? _autoCts;
     private ProgressChipWindow? _autoChip;
@@ -73,6 +76,10 @@ public sealed class AppController : IDisposable
         };
         var menu = new WF.ContextMenuStrip();
         menu.Items.Add("Test Popup", null, (_, _) => ShowPopup(Program.SampleText, IntPtr.Zero));
+        _agentItem = new WF.ToolStripMenuItem("Agent task…", null, (_, _) => OnAgentTrigger("tray"));
+        menu.Items.Add(_agentItem);
+        // enable the agent item only when the selected agent engine's CLI is present
+        menu.Opening += (_, _) => _agentItem.Enabled = AgentEngine.SelectedCliAvailable();
         menu.Items.Add("Settings…", null, (_, _) => OpenSettings());
         menu.Items.Add("Check for Updates…", null, (_, _) => OpenSettings());
         menu.Items.Add("Test ✦ Button", null, (_, _) =>
@@ -99,9 +106,42 @@ public sealed class AppController : IDisposable
         _watcher = new SelectionWatcher(
             OnMainTrigger,
             () => OnInstantTrigger("chip"),
+            () => OnAgentTrigger("chip"),
             () => _popup != null,
             () => _popup?.IsAutoMode == true,
             (text, hwnd) => _popup?.UpdateSource(text, hwnd));
+    }
+
+    // Agent trigger (🤖 chip / tray "Agent task…"): spin up an agent window. From the
+    // chip we first capture the current selection and seed it as optional context;
+    // from the tray there's no selection, so it opens empty.
+    private async void OnAgentTrigger(string source)
+    {
+        Log.Write($"trigger fired (agent, {source})");
+        if (!AgentEngine.SelectedCliAvailable())
+        {
+            System.Media.SystemSounds.Beep.Play();
+            AppController.OpenSettings();   // nudge the user to the agent settings/status
+            return;
+        }
+        var anchor = ScreenUtil.CursorPos();
+        string? ctx = null;
+        if (source == "chip")
+        {
+            var (text, _) = await Capture.GrabSelection();
+            ctx = text;
+        }
+        OpenAgent(ctx, anchor);
+    }
+
+    public void OpenAgent(string? context, ScreenUtil.NativePoint anchor)
+    {
+        var w = new AgentWindow(context, anchor);
+        _agents.Add(w);
+        w.Closed += (_, _) => _agents.Remove(w);
+        w.Show();
+        w.Activate();
+        Log.Write($"agent window opened (context={(context != null ? context.Length + " chars" : "none")})");
     }
 
     public void RefreshHotkey()
@@ -264,6 +304,8 @@ public sealed class AppController : IDisposable
     {
         _autoCts?.Cancel();
         _autoChip?.Close();
+        // close any open agent windows → each kills its own CLI process tree
+        foreach (var a in _agents.ToArray()) { try { a.Close(); } catch { } }
         _tray.Visible = false;
         _tray.Dispose();
         _hotkey.Dispose();

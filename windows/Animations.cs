@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
@@ -163,9 +164,28 @@ internal sealed class VariantCard
     private bool _selected;
     private bool _hover;
 
-    public VariantCard(int index, Theme t, Action<int> onSelect, double fontSize = 13)
+    // Per-card version history: version 0 = the initially generated text; each
+    // completed refine appends a new version. _vidx = which version is DISPLAYED
+    // (and what Copy/Replace/diff/further-refines operate on). Stepping only
+    // changes _vidx; a refine always appends the newest version (no branching).
+    private readonly int _index;
+    private readonly Action<int>? _onVersionChange;
+    private readonly List<string> _versions = new();
+    private int _vidx;
+    private readonly StackPanel _stepper;
+    private readonly TextBlock _prevChev;
+    private readonly TextBlock _nextChev;
+    private readonly TextBlock _counter;
+
+    // Text of the version currently on screen (null before the first version lands).
+    public string? CurrentText => _versions.Count > 0 ? _versions[_vidx] : null;
+
+    public VariantCard(int index, Theme t, Action<int> onSelect, double fontSize = 13,
+                       Action<int>? onVersionChange = null)
     {
         _t = t;
+        _index = index;
+        _onVersionChange = onVersionChange;
 
         _text = new TextBlock { FontSize = fontSize, Foreground = t.Text, TextWrapping = TextWrapping.Wrap };
         _styleLabel = new TextBlock
@@ -174,11 +194,45 @@ internal sealed class VariantCard
             FontFamily = new FontFamily("Consolas"),
             Foreground = t.Faint,
             Margin = new Thickness(0, 4, 0, 0),
+            VerticalAlignment = VerticalAlignment.Center,
             Visibility = Visibility.Collapsed,
         };
+
+        // compact per-card stepper "‹ 2/3 ›" — only shown once a card has >1 version.
+        _prevChev = Chevron("‹", t);
+        _nextChev = Chevron("›", t);
+        _counter = new TextBlock
+        {
+            FontSize = 10,
+            FontFamily = new FontFamily("Consolas"),
+            Foreground = t.Faint,
+            Margin = new Thickness(4, 0, 4, 0),
+            VerticalAlignment = VerticalAlignment.Center,
+        };
+        _stepper = new StackPanel
+        {
+            Orientation = Orientation.Horizontal,
+            HorizontalAlignment = HorizontalAlignment.Right,
+            VerticalAlignment = VerticalAlignment.Center,
+            Margin = new Thickness(0, 4, 0, 0),
+            Visibility = Visibility.Collapsed,
+        };
+        _stepper.Children.Add(_prevChev);
+        _stepper.Children.Add(_counter);
+        _stepper.Children.Add(_nextChev);
+        // e.Handled stops the click bubbling up to the card's selection handler.
+        _prevChev.MouseLeftButtonUp += (_, e) => { e.Handled = true; Step(-1); };
+        _nextChev.MouseLeftButtonUp += (_, e) => { e.Handled = true; Step(1); };
+
+        // bottom row: style label (left) + stepper (right), sharing the card's foot.
+        var bottom = new DockPanel();
+        DockPanel.SetDock(_stepper, Dock.Right);
+        bottom.Children.Add(_stepper);
+        bottom.Children.Add(_styleLabel);
+
         _doneStack = new StackPanel { Visibility = Visibility.Collapsed };
         _doneStack.Children.Add(_text);
-        _doneStack.Children.Add(_styleLabel);
+        _doneStack.Children.Add(bottom);
 
         _dots = new LoadingDots(t.Text) { Margin = new Thickness(1, 3, 0, 3) };
         _error = new TextBlock
@@ -317,6 +371,11 @@ internal sealed class VariantCard
 
     public void SetDone(string text, string? styleLabel)
     {
+        // A completed generation OR refine — record it as the newest version and
+        // display it. (Streaming partials never reach here; failed refines call
+        // SetError, so neither adds a version.)
+        AddVersion(text);
+
         _dots.Stop();
         _dots.Visibility = Visibility.Collapsed;
         _error.Visibility = Visibility.Collapsed;
@@ -367,4 +426,67 @@ internal sealed class VariantCard
     }
 
     public void StopDots() => _dots.Stop();
+
+    // ---------- version history ----------
+
+    private static TextBlock Chevron(string glyph, Theme t) => new()
+    {
+        Text = glyph,
+        FontSize = 12,
+        FontFamily = new FontFamily("Consolas"),
+        Foreground = t.Muted,
+        Cursor = Cursors.Hand,
+        Padding = new Thickness(3, 0, 3, 0),
+        VerticalAlignment = VerticalAlignment.Center,
+    };
+
+    private void AddVersion(string text)
+    {
+        _versions.Add(text);
+        _vidx = _versions.Count - 1;
+        UpdateStepper();
+    }
+
+    // Move the displayed version by delta (clamped). Crossfades the text and tells
+    // the window so _results / diff track the newly-shown version.
+    public void Step(int delta)
+    {
+        if (_versions.Count <= 1) return;
+        int ni = Math.Clamp(_vidx + delta, 0, _versions.Count - 1);
+        if (ni == _vidx) return;
+        _vidx = ni;
+        SwapText(_versions[_vidx]);
+        UpdateStepper();
+        _onVersionChange?.Invoke(_index);
+    }
+
+    private void UpdateStepper()
+    {
+        if (_versions.Count > 1)
+        {
+            _stepper.Visibility = Visibility.Visible;
+            _counter.Text = $"{_vidx + 1}/{_versions.Count}";
+            _prevChev.Opacity = _vidx > 0 ? 1.0 : 0.3;
+            _nextChev.Opacity = _vidx < _versions.Count - 1 ? 1.0 : 0.3;
+            _prevChev.IsHitTestVisible = _vidx > 0;
+            _nextChev.IsHitTestVisible = _vidx < _versions.Count - 1;
+        }
+        else
+        {
+            _stepper.Visibility = Visibility.Collapsed;
+        }
+    }
+
+    // Quick ~120ms crossfade: fade the text out, swap it, fade back in.
+    private void SwapText(string newText)
+    {
+        var fade = new DoubleAnimation(0, Anim.Ms(60)) { EasingFunction = Anim.EaseOut };
+        fade.Completed += (_, _) =>
+        {
+            _text.Text = newText;
+            _text.BeginAnimation(UIElement.OpacityProperty,
+                new DoubleAnimation(0, 1, Anim.Ms(60)) { EasingFunction = Anim.EaseOut });
+        };
+        _text.BeginAnimation(UIElement.OpacityProperty, fade);
+    }
 }

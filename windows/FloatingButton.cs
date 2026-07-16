@@ -37,6 +37,7 @@ public sealed class SelectionWatcher : IDisposable
     private readonly IntPtr _hook;
     private readonly Action _onClicked;   // ✦ chip → open the popup
     private readonly Action _onInstant;   // ⚡ chip → hands-free auto-replace
+    private readonly Action _onAgent;     // 🤖 chip → spin up an agent on the selection
     private readonly Func<bool> _popupOpen;
     private readonly Func<bool> _autoMode;
     private readonly Action<string, IntPtr> _onAutoText;
@@ -47,11 +48,12 @@ public sealed class SelectionWatcher : IDisposable
     private uint _lastUpTime;
     private POINT _lastUpAt;
 
-    public SelectionWatcher(Action onClicked, Action onInstant, Func<bool> popupOpen,
+    public SelectionWatcher(Action onClicked, Action onInstant, Action onAgent, Func<bool> popupOpen,
                             Func<bool> autoMode, Action<string, IntPtr> onAutoText)
     {
         _onClicked = onClicked;
         _onInstant = onInstant;
+        _onAgent = onAgent;
         _popupOpen = popupOpen;
         _autoMode = autoMode;
         _onAutoText = onAutoText;
@@ -120,6 +122,9 @@ public sealed class SelectionWatcher : IDisposable
         Log.Write($"gesture: dragged={dragged} dbl={doubleClick} enabled={Settings.Current.FloatingButton} popupOpen={_popupOpen()}");
         if (!Settings.Current.FloatingButton) return;
         if (_popupOpen()) return;
+        // if every per-chip toggle is off (or only 🤖 is on but its CLI is absent),
+        // there's nothing to show — skip the bar entirely rather than flash an empty one
+        if (FloatingButtonWindow.EnabledChipCount() == 0) return;
 
         // small delay so the button doesn't flash mid-interaction
         var timer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(250) };
@@ -153,6 +158,12 @@ public sealed class SelectionWatcher : IDisposable
                 Log.Write("floating ⚡ clicked");
                 HideButton();
                 _onInstant();
+            },
+            onAgent: () =>
+            {
+                Log.Write("floating 🤖 clicked");
+                HideButton();
+                _onAgent();
             });
         Log.Write($"floating buttons shown near {screenX},{screenY}");
         _button.ShowNear(screenX, screenY);
@@ -195,10 +206,12 @@ public sealed class FloatingButtonWindow : Window
     private readonly TextBlock _starGlyph;
     private readonly Border _bolt;
     private readonly TextBlock _boltGlyph;
+    private readonly Border _robot;
+    private readonly TextBlock _robotGlyph;
     private readonly ScaleTransform _scale = new(1, 1);
     private bool _hiding;
 
-    public FloatingButtonWindow(Action onStar, Action onBolt)
+    public FloatingButtonWindow(Action onStar, Action onBolt, Action onAgent)
     {
         WindowStyle = WindowStyle.None;
         AllowsTransparency = true;
@@ -208,13 +221,18 @@ public sealed class FloatingButtonWindow : Window
         ShowActivated = false;
         ResizeMode = ResizeMode.NoResize;
 
-        // Two chips side by side in a single window: ✦ opens the popup, ⚡ runs the
-        // hands-free instant-replace. One window keeps a single z-order/positioning
-        // pass and one auto-hide/fade for both. The transparent gap between the
-        // rounded pills makes them read as two separate buttons.
+        // Chips side by side in a single window: ✦ opens the popup, ⚡ runs the
+        // hands-free instant-replace, 🤖 spins up an agent on the selection. One
+        // window keeps a single z-order/positioning pass and one auto-hide/fade for
+        // all. The transparent gap between the rounded pills makes them read as
+        // separate buttons. The 🤖 chip only appears when the selected agent engine's
+        // CLI is available (decided per-appearance in ShowNear).
         _star = MakeChip("✦", onStar, out _starGlyph);
-        _star.Margin = new Thickness(0, 0, GapDip, 0);
         _bolt = MakeChip("⚡", onBolt, out _boltGlyph);
+        _robot = MakeChip("🤖", onAgent, out _robotGlyph);
+        // user asked for a robot face; force a symbol font (renders mono where the
+        // glyph exists, colour emoji otherwise — an accepted, explicit exception).
+        _robotGlyph.FontFamily = new System.Windows.Media.FontFamily("Segoe UI Symbol");
         _row = new StackPanel
         {
             Orientation = Orientation.Horizontal,
@@ -223,6 +241,7 @@ public sealed class FloatingButtonWindow : Window
         };
         _row.Children.Add(_star);
         _row.Children.Add(_bolt);
+        _row.Children.Add(_robot);
         Content = _row;
 
         _autoHide.Tick += (_, _) => { _autoHide.Stop(); HideButton(); };
@@ -265,21 +284,51 @@ public sealed class FloatingButtonWindow : Window
         SetWindowLong(h, GWL_EXSTYLE, GetWindowLong(h, GWL_EXSTYLE) | WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW);
     }
 
+    // How many chips would render right now: each per-chip toggle, with 🤖 additionally
+    // gated on the selected agent engine's CLI resolving. Drives the "skip the empty
+    // bar" check in the watcher and the 1–3 width math in ShowNear.
+    public static int EnabledChipCount()
+    {
+        var s = Settings.Current;
+        int n = 0;
+        if (s.ChipStar) n++;
+        if (s.ChipBolt) n++;
+        if (s.ChipAgent && AgentEngine.SelectedCliAvailable()) n++;
+        return n;
+    }
+
     public void ShowNear(int screenX, int screenY)
     {
         // pick up the current configured size before realizing/placing the window
         double dip = BtnDip;
         double gap = GapDip;
-        double rowDip = dip * 2 + gap;
+        // Per-chip toggles decide what renders; the 🤖 agent chip additionally needs
+        // the selected agent engine's CLI to exist. Build the visible set in order so
+        // the bar width and inter-chip gaps generalise to any count from 1 to 3.
+        var cfg = Settings.Current;
+        _star.Visibility = cfg.ChipStar ? Visibility.Visible : Visibility.Collapsed;
+        _bolt.Visibility = cfg.ChipBolt ? Visibility.Visible : Visibility.Collapsed;
+        bool agent = cfg.ChipAgent && AgentEngine.SelectedCliAvailable();
+        _robot.Visibility = agent ? Visibility.Visible : Visibility.Collapsed;
+        var visible = new System.Collections.Generic.List<(Border chip, TextBlock gl)>();
+        if (cfg.ChipStar) visible.Add((_star, _starGlyph));
+        if (cfg.ChipBolt) visible.Add((_bolt, _boltGlyph));
+        if (agent) visible.Add((_robot, _robotGlyph));
+        if (visible.Count == 0) return;   // nothing to show (watcher guards this too)
+
+        int chips = visible.Count;
+        double rowDip = dip * chips + gap * (chips - 1);
         // corner-radius = height/2 keeps each chip a perfect circle (WPF won't clamp
         // an oversized radius like CSS, so it must track the live size, not a const).
-        foreach (var (chip, gl) in new[] { (_star, _starGlyph), (_bolt, _boltGlyph) })
+        // Trailing gap on every visible chip except the last.
+        for (int i = 0; i < visible.Count; i++)
         {
+            var (chip, gl) = visible[i];
             chip.Width = chip.Height = dip;
             chip.CornerRadius = new CornerRadius(dip / 2);
             gl.FontSize = dip * 0.43;
+            chip.Margin = new Thickness(0, 0, i < visible.Count - 1 ? gap : 0, 0);
         }
-        _star.Margin = new Thickness(0, 0, gap, 0);
         Width = rowDip; Height = dip;
 
         if (!IsVisible) Show(); // realize the HWND

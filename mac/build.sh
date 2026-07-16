@@ -25,6 +25,10 @@ cat > "$OUT/Contents/Info.plist" << 'PLIST'
     <true/>
     <key>NSPrincipalClass</key>
     <string>NSApplication</string>
+    <key>NSMicrophoneUsageDescription</key>
+    <string>Cleanup uses the microphone for voice input in Agent mode.</string>
+    <key>NSSpeechRecognitionUsageDescription</key>
+    <string>Cleanup uses speech recognition to transcribe your voice into agent instructions.</string>
     <key>NSServices</key>
     <array>
         <dict>
