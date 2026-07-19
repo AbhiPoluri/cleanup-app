@@ -56,7 +56,9 @@ public sealed class AppController : IDisposable
     private readonly HotkeyWindow _hotkey;
     private readonly SelectionWatcher _watcher;
     private readonly WF.ToolStripMenuItem _agentItem;
+    private readonly WF.ToolStripMenuItem _whiteboardItem;
     private PopupWindow? _popup;
+    private WhiteboardWindow? _whiteboard;
     // open agent windows — each owns its own CLI session; killed on app exit
     private readonly System.Collections.Generic.List<AgentWindow> _agents = new();
     // in-flight hands-free generation (null when idle) + its progress chip
@@ -78,14 +80,25 @@ public sealed class AppController : IDisposable
         menu.Items.Add("Test Popup", null, (_, _) => ShowPopup(Program.SampleText, IntPtr.Zero));
         _agentItem = new WF.ToolStripMenuItem("Agent task…", null, (_, _) => OnAgentTrigger("tray"));
         menu.Items.Add(_agentItem);
-        // enable the agent item only when the selected agent engine's CLI is present
-        menu.Opening += (_, _) => _agentItem.Enabled = AgentEngine.SelectedCliAvailable();
+        _whiteboardItem = new WF.ToolStripMenuItem("Whiteboard…", null, (_, _) => OpenWhiteboard());
+        menu.Items.Add(_whiteboardItem);
+        menu.Items.Add("Snip → Agent", null, (_, _) => OnSnipTrigger(SnipMode.Area));
+        // enable the agent item only when the selected agent engine's CLI is present, and
+        // suffix it with the current project so the tray reflects where a task will land
+        menu.Opening += (_, _) =>
+        {
+            _agentItem.Enabled = AgentEngine.SelectedCliAvailable();
+            _agentItem.Text = $"Agent task ({ProjectStore.Current().Name})…";
+            _whiteboardItem.Enabled = AgentEngine.SelectedCliAvailable();
+            _whiteboardItem.Text = $"Whiteboard ({ProjectStore.Current().Name})…";
+        };
+        menu.Items.Add("Welcome & health…", null, (_, _) => ShowWelcome());
         menu.Items.Add("Settings…", null, (_, _) => OpenSettings());
         menu.Items.Add("Check for Updates…", null, (_, _) => OpenSettings());
         menu.Items.Add("Test ✦ Button", null, (_, _) =>
         {
             var p = WF.Cursor.Position;
-            _watcher.ShowTestButton(p.X, p.Y);
+            _watcher!.ShowTestButton(p.X, p.Y);   // assigned in the ctor before any menu interaction
         });
         menu.Items.Add("Open Log", null, (_, _) =>
         {
@@ -107,9 +120,32 @@ public sealed class AppController : IDisposable
             OnMainTrigger,
             () => OnInstantTrigger("chip"),
             () => OnAgentTrigger("chip"),
+            OnSnipTrigger,
             () => _popup != null,
             () => _popup?.IsAutoMode == true,
             (text, hwnd) => _popup?.UpdateSource(text, hwnd));
+
+        // Migrate the legacy workdir, ensure the Default project exists, and (re)generate
+        // every project's instruction files (CLAUDE.md / AGENTS.md) from the saved personal
+        // context, so the first agent run this session already has the user's context.
+        ProjectStore.Bootstrap();
+
+        // First run → a one-screen welcome with an embedded health checklist, so a
+        // broken dependency is visible before the user hits a silent failure. Deferred
+        // to the dispatcher so the tray/hotkeys finish wiring first. Never in test mode.
+        if (!Program.TestMode && !Settings.Current.DidOnboard)
+            System.Windows.Application.Current.Dispatcher.BeginInvoke(() => ShowWelcome());
+    }
+
+    private WelcomeWindow? _welcome;
+
+    public void ShowWelcome()
+    {
+        if (_welcome != null) { _welcome.Activate(); return; }
+        _welcome = new WelcomeWindow();
+        _welcome.Closed += (_, _) => _welcome = null;
+        _welcome.Show();
+        _welcome.Activate();
     }
 
     // Agent trigger (🤖 chip / tray "Agent task…"): spin up an agent window. From the
@@ -134,7 +170,7 @@ public sealed class AppController : IDisposable
         OpenAgent(ctx, anchor);
     }
 
-    public void OpenAgent(string? context, ScreenUtil.NativePoint anchor)
+    public AgentWindow OpenAgent(string? context, ScreenUtil.NativePoint anchor)
     {
         var w = new AgentWindow(context, anchor);
         _agents.Add(w);
@@ -142,6 +178,64 @@ public sealed class AppController : IDisposable
         w.Show();
         w.Activate();
         Log.Write($"agent window opened (context={(context != null ? context.Length + " chars" : "none")})");
+        return w;
+    }
+
+    public void OpenWhiteboard()
+    {
+        if (!AgentEngine.SelectedCliAvailable())
+        {
+            System.Media.SystemSounds.Beep.Play();
+            OpenSettings();
+            return;
+        }
+        if (_whiteboard != null) { _whiteboard.Activate(); return; }
+        _whiteboard = new WhiteboardWindow();
+        _whiteboard.Closed += (_, _) => _whiteboard = null;
+        _whiteboard.Show();
+        _whiteboard.Activate();
+        Log.Write($"whiteboard opened engine={Settings.Current.ResolvedAgentEngine} model={Settings.Current.AgentModel}");
+    }
+
+    // Snip trigger (✂ chip / tray "Snip → Agent"): capture per the chosen mode, then hand
+    // the PNG to the post-capture flow. Area/window are async (overlay / delayed sample).
+    private void OnSnipTrigger(SnipMode mode)
+    {
+        Log.Write($"trigger fired (snip, {mode})");
+        switch (mode)
+        {
+            case SnipMode.FullScreen: OnSnipCaptured(Snip.CaptureFullScreen()); break;
+            case SnipMode.Window: Snip.CaptureWindow(OnSnipCaptured); break;
+            default: Snip.CaptureArea(OnSnipCaptured); break;
+        }
+    }
+
+    // After a capture: copy the image to the clipboard (bonus — paste-able anywhere) and
+    // attach it to the agent — reusing the open agent window if there is one, else opening
+    // a new one pre-attached. A cancelled/empty capture is a silent no-op.
+    private void OnSnipCaptured(string? path)
+    {
+        if (path == null) { Log.Write("snip: cancelled / empty"); return; }
+        CopyImageToClipboard(path);
+        var w = _agents.Count > 0 ? _agents[^1] : OpenAgent(null, ScreenUtil.CursorPos());
+        w.Activate();
+        w.AttachExternal(path);
+        Log.Write($"snip: captured {path} → agent");
+    }
+
+    private static void CopyImageToClipboard(string path)
+    {
+        try
+        {
+            var bi = new System.Windows.Media.Imaging.BitmapImage();
+            bi.BeginInit();
+            bi.CacheOption = System.Windows.Media.Imaging.BitmapCacheOption.OnLoad;
+            bi.UriSource = new Uri(path);
+            bi.EndInit();
+            bi.Freeze();
+            System.Windows.Clipboard.SetImage(bi);
+        }
+        catch (Exception ex) { Log.Write("snip: clipboard copy failed — " + ex.Message); }
     }
 
     public void RefreshHotkey()
@@ -306,6 +400,9 @@ public sealed class AppController : IDisposable
         _autoChip?.Close();
         // close any open agent windows → each kills its own CLI process tree
         foreach (var a in _agents.ToArray()) { try { a.Close(); } catch { } }
+        try { _whiteboard?.Close(); } catch { }
+        // kill the local-voice helper process if it was spawned
+        try { VoiceEngine.Shutdown(); } catch { }
         _tray.Visible = false;
         _tray.Dispose();
         _hotkey.Dispose();
@@ -346,7 +443,10 @@ public sealed class HotkeyWindow : WF.NativeWindow, IDisposable
     private void Register(int id, uint mods, uint vk, string display, string what)
     {
         UnregisterHotKey(Handle, id);
-        if (RegisterHotKey(Handle, id, mods, vk))
+        bool ok = RegisterHotKey(Handle, id, mods, vk);
+        // record the outcome so the Health panel can show "active" / "failed"
+        HotkeyHealth.Record(what, display, ok);
+        if (ok)
         {
             Log.Write($"{what} hotkey {display} registered");
         }
@@ -355,7 +455,8 @@ public sealed class HotkeyWindow : WF.NativeWindow, IDisposable
             Log.Write($"{what} hotkey {display} FAILED to register — another app owns it");
             WF.MessageBox.Show(
                 $"Another app already owns {display}, so the Cleanup {what} hotkey won't work.\n" +
-                "Pick a different hotkey in Settings, or use the floating buttons.",
+                "Pick a different hotkey in Settings, or use the floating buttons.\n" +
+                "See Health in Settings for the current status.",
                 "Cleanup");
         }
     }

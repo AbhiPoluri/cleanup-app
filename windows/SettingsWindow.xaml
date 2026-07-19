@@ -1,269 +1,578 @@
 <Window x:Class="Cleanup.SettingsWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="Cleanup Settings" Width="460" SizeToContent="Height"
-        ResizeMode="NoResize" WindowStartupLocation="CenterScreen">
-  <StackPanel Margin="20">
-    <Grid Margin="0,0,0,12">
-      <Grid.ColumnDefinitions>
-        <ColumnDefinition Width="110"/>
-        <ColumnDefinition Width="*"/>
-      </Grid.ColumnDefinitions>
-      <TextBlock Text="Backend" VerticalAlignment="Center"/>
-      <ComboBox x:Name="BackendBox" Grid.Column="1" SelectionChanged="Backend_Changed">
-        <ComboBoxItem Tag="ollama">Ollama (local)</ComboBoxItem>
-        <ComboBoxItem Tag="chatgpt">ChatGPT subscription (Codex login)</ComboBoxItem>
-        <ComboBoxItem Tag="claude">Claude subscription (Claude Code login)</ComboBoxItem>
-        <ComboBoxItem Tag="openai">OpenAI-compatible API</ComboBoxItem>
-      </ComboBox>
-    </Grid>
+        Title="Cleanup Settings" Width="760" Height="560" MinWidth="640" MinHeight="480"
+        ResizeMode="CanResize" WindowStartupLocation="CenterScreen"
+        UseLayoutRounding="True" TextOptions.TextFormattingMode="Ideal">
 
-    <StackPanel x:Name="OllamaPanel">
-      <Grid Margin="0,0,0,8">
-        <Grid.ColumnDefinitions>
-          <ColumnDefinition Width="110"/>
-          <ColumnDefinition Width="*"/>
-        </Grid.ColumnDefinitions>
-        <TextBlock Text="Server URL" VerticalAlignment="Center"/>
-        <TextBox x:Name="OllamaUrlBox" Grid.Column="1"/>
-      </Grid>
-      <Grid Margin="0,0,0,8">
-        <Grid.ColumnDefinitions>
-          <ColumnDefinition Width="110"/>
-          <ColumnDefinition Width="*"/>
-        </Grid.ColumnDefinitions>
-        <TextBlock Text="Model" VerticalAlignment="Center"/>
-        <ComboBox x:Name="OllamaModelBox" Grid.Column="1" IsEditable="True"/>
-      </Grid>
-    </StackPanel>
+  <!-- Theme brushes are injected from code-behind (Theme.Detect() → light/dark) into the
+       window Resources under these keys, and referenced here via DynamicResource so the
+       whole surface tracks the OS theme. Migrated off SystemColors so Settings is Mono
+       dark like the rest of the app. -->
+  <Window.Resources>
 
-    <StackPanel x:Name="ChatgptPanel">
-      <Grid Margin="0,0,0,8">
-        <Grid.ColumnDefinitions>
-          <ColumnDefinition Width="110"/>
-          <ColumnDefinition Width="*"/>
-        </Grid.ColumnDefinitions>
-        <TextBlock Text="Model" VerticalAlignment="Center"/>
-        <ComboBox x:Name="ChatgptModelBox" Grid.Column="1"/>
-      </Grid>
-      <Grid Margin="0,0,0,8">
-        <Grid.ColumnDefinitions>
-          <ColumnDefinition Width="110"/>
-          <ColumnDefinition Width="*"/>
-        </Grid.ColumnDefinitions>
-        <TextBlock Text="Reasoning" VerticalAlignment="Center"/>
-        <ComboBox x:Name="ChatgptEffortBox" Grid.Column="1"/>
-      </Grid>
-      <TextBlock FontSize="11" Opacity="0.55" TextWrapping="Wrap" Margin="0,0,0,8"
-                 Text="Low reasoning is ~3x faster for short rewrites. gpt-5.4-mini is the fastest model (~1s)."/>
-      <Border Background="#14000000" CornerRadius="6" Padding="10" Margin="0,0,0,8">
-        <TextBlock x:Name="CodexStatusLabel" FontSize="11.5" TextWrapping="Wrap"/>
-      </Border>
-    </StackPanel>
+    <!-- input controls: dark-aware via the injected brush keys -->
+    <Style TargetType="TextBox">
+      <Setter Property="Background" Value="{DynamicResource Surface3}"/>
+      <Setter Property="Foreground" Value="{DynamicResource Text}"/>
+      <Setter Property="BorderBrush" Value="{DynamicResource Line}"/>
+      <Setter Property="CaretBrush" Value="{DynamicResource Text}"/>
+      <Setter Property="Padding" Value="6,3"/>
+      <Setter Property="BorderThickness" Value="1"/>
+    </Style>
+    <Style TargetType="PasswordBox">
+      <Setter Property="Background" Value="{DynamicResource Surface3}"/>
+      <Setter Property="Foreground" Value="{DynamicResource Text}"/>
+      <Setter Property="BorderBrush" Value="{DynamicResource Line}"/>
+      <Setter Property="CaretBrush" Value="{DynamicResource Text}"/>
+      <Setter Property="Padding" Value="6,3"/>
+      <Setter Property="BorderThickness" Value="1"/>
+    </Style>
+    <Style TargetType="ComboBox">
+      <Setter Property="Background" Value="{DynamicResource Surface3}"/>
+      <Setter Property="Foreground" Value="{DynamicResource Text}"/>
+      <Setter Property="BorderBrush" Value="{DynamicResource Line}"/>
+      <Setter Property="Padding" Value="6,3"/>
+    </Style>
+    <Style TargetType="ComboBoxItem">
+      <Setter Property="Background" Value="{DynamicResource Surface2}"/>
+      <Setter Property="Foreground" Value="{DynamicResource Text}"/>
+    </Style>
+    <Style TargetType="CheckBox">
+      <Setter Property="Foreground" Value="{DynamicResource Text}"/>
+      <Setter Property="Margin" Value="0,0,0,4"/>
+    </Style>
 
-    <StackPanel x:Name="ClaudePanel">
-      <Grid Margin="0,0,0,8">
-        <Grid.ColumnDefinitions>
-          <ColumnDefinition Width="110"/>
-          <ColumnDefinition Width="*"/>
-        </Grid.ColumnDefinitions>
-        <TextBlock Text="Model" VerticalAlignment="Center"/>
-        <ComboBox x:Name="ClaudeModelBox" Grid.Column="1" IsEditable="True"/>
-      </Grid>
-      <TextBlock FontSize="11" Opacity="0.55" TextWrapping="Wrap" Margin="0,0,0,8"
-                 Text="Uses your Claude Code subscription — no API key. Slower than API backends (~8-10s per rewrite; streaming softens it)."/>
-      <Border Background="#14000000" CornerRadius="6" Padding="10" Margin="0,0,0,8">
-        <TextBlock x:Name="ClaudeStatusLabel" FontSize="11.5" TextWrapping="Wrap"/>
-      </Border>
-    </StackPanel>
+    <!-- text roles -->
+    <Style x:Key="SectionTitle" TargetType="TextBlock">
+      <Setter Property="FontSize" Value="16"/>
+      <Setter Property="FontWeight" Value="SemiBold"/>
+      <Setter Property="Foreground" Value="{DynamicResource Text}"/>
+    </Style>
+    <Style x:Key="SectionDesc" TargetType="TextBlock">
+      <Setter Property="FontSize" Value="12"/>
+      <Setter Property="Foreground" Value="{DynamicResource Muted}"/>
+      <Setter Property="TextWrapping" Value="Wrap"/>
+      <Setter Property="Margin" Value="0,3,0,0"/>
+    </Style>
+    <Style x:Key="CardTitle" TargetType="TextBlock">
+      <Setter Property="FontSize" Value="12"/>
+      <Setter Property="FontWeight" Value="SemiBold"/>
+      <Setter Property="Foreground" Value="{DynamicResource Muted}"/>
+      <Setter Property="Margin" Value="0,0,0,10"/>
+    </Style>
+    <Style x:Key="RowLabel" TargetType="TextBlock">
+      <Setter Property="FontSize" Value="12"/>
+      <Setter Property="Foreground" Value="{DynamicResource Muted}"/>
+      <Setter Property="VerticalAlignment" Value="Center"/>
+    </Style>
+    <Style x:Key="Caption" TargetType="TextBlock">
+      <Setter Property="FontSize" Value="11"/>
+      <Setter Property="Foreground" Value="{DynamicResource Faint}"/>
+      <Setter Property="TextWrapping" Value="Wrap"/>
+      <Setter Property="Margin" Value="0,2,0,0"/>
+    </Style>
 
-    <StackPanel x:Name="OpenaiPanel">
-      <Grid Margin="0,0,0,8">
-        <Grid.ColumnDefinitions>
-          <ColumnDefinition Width="110"/>
-          <ColumnDefinition Width="*"/>
-        </Grid.ColumnDefinitions>
-        <TextBlock Text="Base URL" VerticalAlignment="Center"/>
-        <TextBox x:Name="ApiBaseBox" Grid.Column="1"/>
-      </Grid>
-      <Grid Margin="0,0,0,8">
-        <Grid.ColumnDefinitions>
-          <ColumnDefinition Width="110"/>
-          <ColumnDefinition Width="*"/>
-        </Grid.ColumnDefinitions>
-        <TextBlock Text="API key" VerticalAlignment="Center"/>
-        <PasswordBox x:Name="ApiKeyBox" Grid.Column="1"/>
-      </Grid>
-      <Grid Margin="0,0,0,8">
-        <Grid.ColumnDefinitions>
-          <ColumnDefinition Width="110"/>
-          <ColumnDefinition Width="*"/>
-        </Grid.ColumnDefinitions>
-        <TextBlock Text="Model" VerticalAlignment="Center"/>
-        <TextBox x:Name="ApiModelBox" Grid.Column="1"/>
-      </Grid>
-      <TextBlock FontSize="11" Opacity="0.55" TextWrapping="Wrap" Margin="0,0,0,8"
-                 Text="OpenRouter: base https://openrouter.ai/api/v1, model needs a vendor prefix (e.g. openai/gpt-4o-mini). OpenAI: base https://api.openai.com."/>
-    </StackPanel>
+    <!-- grouped card container -->
+    <Style x:Key="Card" TargetType="Border">
+      <Setter Property="Background" Value="{DynamicResource Surface2}"/>
+      <Setter Property="BorderBrush" Value="{DynamicResource Line}"/>
+      <Setter Property="BorderThickness" Value="1"/>
+      <Setter Property="CornerRadius" Value="10"/>
+      <Setter Property="Padding" Value="14"/>
+      <Setter Property="Margin" Value="0,0,0,16"/>
+    </Style>
+    <!-- nested status box (CLI/login state) -->
+    <Style x:Key="StatusBox" TargetType="Border">
+      <Setter Property="Background" Value="{DynamicResource Surface3}"/>
+      <Setter Property="BorderBrush" Value="{DynamicResource Line}"/>
+      <Setter Property="BorderThickness" Value="1"/>
+      <Setter Property="CornerRadius" Value="6"/>
+      <Setter Property="Padding" Value="10"/>
+      <Setter Property="Margin" Value="0,4,0,0"/>
+    </Style>
 
-    <Separator Margin="0,8"/>
+    <!-- generic themed button -->
+    <Style x:Key="Btn" TargetType="Button">
+      <Setter Property="Background" Value="{DynamicResource Surface3}"/>
+      <Setter Property="Foreground" Value="{DynamicResource Text}"/>
+      <Setter Property="BorderBrush" Value="{DynamicResource Line}"/>
+      <Setter Property="BorderThickness" Value="1"/>
+      <Setter Property="Padding" Value="12,5"/>
+      <Setter Property="Cursor" Value="Hand"/>
+    </Style>
 
-    <!-- Agent mode: independent of the rewrite backend above -->
-    <TextBlock Text="Agent mode" FontWeight="SemiBold" Margin="0,4,0,8"/>
-    <Grid Margin="0,0,0,8">
-      <Grid.ColumnDefinitions>
-        <ColumnDefinition Width="110"/>
-        <ColumnDefinition Width="*"/>
-      </Grid.ColumnDefinitions>
-      <TextBlock Text="Engine" VerticalAlignment="Center"/>
-      <ComboBox x:Name="AgentEngineBox" Grid.Column="1" SelectionChanged="AgentEngine_Changed">
-        <ComboBoxItem Tag="codex">Codex (ChatGPT login)</ComboBoxItem>
-        <ComboBoxItem Tag="claude">Claude (Claude Code login)</ComboBoxItem>
-      </ComboBox>
-    </Grid>
-    <TextBlock FontSize="11" Opacity="0.55" TextWrapping="Wrap" Margin="0,0,0,8"
-               Text="More engines coming soon (Ollama, API keys)."/>
-    <Grid Margin="0,0,0,8">
-      <Grid.ColumnDefinitions>
-        <ColumnDefinition Width="110"/>
-        <ColumnDefinition Width="*"/>
-      </Grid.ColumnDefinitions>
-      <TextBlock Text="Model" VerticalAlignment="Center"/>
-      <ComboBox x:Name="AgentModelBox" Grid.Column="1" IsEditable="True"/>
-    </Grid>
-    <Grid Margin="0,0,0,8">
-      <Grid.ColumnDefinitions>
-        <ColumnDefinition Width="110"/>
-        <ColumnDefinition Width="*"/>
-      </Grid.ColumnDefinitions>
-      <TextBlock Text="Permissions" VerticalAlignment="Center"/>
-      <ComboBox x:Name="AgentPermBox" Grid.Column="1" SelectionChanged="AgentPerm_Changed">
-        <ComboBoxItem Tag="safe">Safe — read &amp; analyze only</ComboBoxItem>
-        <ComboBoxItem Tag="standard">Standard — can edit files</ComboBoxItem>
-        <ComboBoxItem Tag="full">Full — no sandbox (dangerous)</ComboBoxItem>
-      </ComboBox>
-    </Grid>
-    <TextBlock x:Name="AgentWarnLabel" FontSize="11.5" FontWeight="SemiBold" TextWrapping="Wrap"
-               Margin="0,0,0,8" Visibility="Collapsed"
-               Text="Full gives the agent unrestricted access to your machine. Use only when you trust the task."/>
-    <Border Background="#14000000" CornerRadius="6" Padding="10" Margin="0,0,0,8">
-      <TextBlock x:Name="AgentStatusLabel" FontSize="11.5" TextWrapping="Wrap"/>
+    <!-- left-nav row -->
+    <Style x:Key="NavBtn" TargetType="Button">
+      <Setter Property="Background" Value="Transparent"/>
+      <Setter Property="Foreground" Value="{DynamicResource Muted}"/>
+      <Setter Property="BorderThickness" Value="0"/>
+      <Setter Property="HorizontalContentAlignment" Value="Left"/>
+      <Setter Property="Padding" Value="12,8"/>
+      <Setter Property="FontSize" Value="13"/>
+      <Setter Property="Cursor" Value="Hand"/>
+      <Setter Property="Margin" Value="0,1"/>
+      <Setter Property="Template">
+        <Setter.Value>
+          <ControlTemplate TargetType="Button">
+            <Border x:Name="Bg" Background="{TemplateBinding Background}" CornerRadius="7"
+                    Padding="{TemplateBinding Padding}">
+              <ContentPresenter HorizontalAlignment="Left" VerticalAlignment="Center"/>
+            </Border>
+          </ControlTemplate>
+        </Setter.Value>
+      </Setter>
+    </Style>
+  </Window.Resources>
+
+  <Grid x:Name="Root">
+    <Grid.ColumnDefinitions>
+      <ColumnDefinition Width="184"/>
+      <ColumnDefinition Width="*"/>
+    </Grid.ColumnDefinitions>
+
+    <!-- ===================== SIDEBAR ===================== -->
+    <Border x:Name="Sidebar" Grid.Column="0" BorderThickness="0,0,1,0">
+      <StackPanel Margin="8,16,8,8">
+        <TextBlock Text="SETTINGS" FontSize="10.5" FontWeight="SemiBold"
+                   Foreground="{DynamicResource Faint}" Margin="10,0,0,10"/>
+        <Button x:Name="NavHealth"   Style="{StaticResource NavBtn}" Tag="health"   Content="Health"   Click="Nav_Click"/>
+        <Button x:Name="NavRewrite"  Style="{StaticResource NavBtn}" Tag="rewrite"  Content="Rewrite"  Click="Nav_Click"/>
+        <Button x:Name="NavTriggers" Style="{StaticResource NavBtn}" Tag="triggers" Content="Triggers" Click="Nav_Click"/>
+        <Button x:Name="NavAgent"    Style="{StaticResource NavBtn}" Tag="agent"    Content="Agent"    Click="Nav_Click"/>
+        <Button x:Name="NavAbout"    Style="{StaticResource NavBtn}" Tag="about"    Content="About"    Click="Nav_Click"/>
+      </StackPanel>
     </Border>
 
-    <Separator Margin="0,8"/>
+    <!-- ===================== CONTENT ===================== -->
+    <Grid Grid.Column="1">
+      <Grid.RowDefinitions>
+        <RowDefinition Height="*"/>
+        <RowDefinition Height="Auto"/>
+      </Grid.RowDefinitions>
 
-    <Grid Margin="0,8,0,8">
-      <Grid.ColumnDefinitions>
-        <ColumnDefinition Width="110"/>
-        <ColumnDefinition Width="*"/>
-      </Grid.ColumnDefinitions>
-      <TextBlock Text="Default tone" VerticalAlignment="Center"/>
-      <ComboBox x:Name="ToneBox" Grid.Column="1">
-        <ComboBoxItem>Clean</ComboBoxItem>
-        <ComboBoxItem>Professional</ComboBoxItem>
-        <ComboBoxItem>Casual</ComboBoxItem>
-        <ComboBoxItem>Blunt</ComboBoxItem>
-      </ComboBox>
+      <!-- ===== HEALTH ===== -->
+      <ScrollViewer x:Name="HealthScroll" Grid.Row="0" VerticalScrollBarVisibility="Auto" Padding="24,22">
+        <StackPanel>
+          <Grid>
+            <Grid.ColumnDefinitions>
+              <ColumnDefinition Width="*"/>
+              <ColumnDefinition Width="Auto"/>
+            </Grid.ColumnDefinitions>
+            <StackPanel>
+              <TextBlock Text="Health" Style="{StaticResource SectionTitle}"/>
+              <TextBlock Text="If a feature seems dead, look here first. Red rows are the cause."
+                         Style="{StaticResource SectionDesc}"/>
+            </StackPanel>
+            <Button x:Name="HealthRefreshBtn" Grid.Column="1" Style="{StaticResource Btn}"
+                    VerticalAlignment="Top" Padding="9,4" Click="HealthRefresh_Click"
+                    ToolTip="Recheck everything now">
+              <TextBlock FontFamily="Segoe Fluent Icons,Segoe MDL2 Assets" Text="&#xE72C;" FontSize="13"/>
+            </Button>
+          </Grid>
+          <Border Style="{StaticResource Card}" Margin="0,16,0,0">
+            <StackPanel x:Name="HealthPanel"/>
+          </Border>
+        </StackPanel>
+      </ScrollViewer>
+
+      <!-- ===== REWRITE ===== -->
+      <ScrollViewer x:Name="RewriteScroll" Grid.Row="0" VerticalScrollBarVisibility="Auto"
+                    Padding="24,22" Visibility="Collapsed">
+        <StackPanel>
+          <TextBlock Text="Rewrite" Style="{StaticResource SectionTitle}"/>
+          <TextBlock Text="Where your rewrites come from, and their defaults."
+                     Style="{StaticResource SectionDesc}" Margin="0,3,0,16"/>
+
+          <Border Style="{StaticResource Card}">
+            <StackPanel>
+              <TextBlock Text="Backend" Style="{StaticResource CardTitle}"/>
+              <Grid Margin="0,0,0,10">
+                <Grid.ColumnDefinitions>
+                  <ColumnDefinition Width="110"/>
+                  <ColumnDefinition Width="*"/>
+                </Grid.ColumnDefinitions>
+                <TextBlock Text="Backend" Style="{StaticResource RowLabel}"/>
+                <ComboBox x:Name="BackendBox" Grid.Column="1" SelectionChanged="Backend_Changed">
+                  <ComboBoxItem Tag="ollama">Ollama (local)</ComboBoxItem>
+                  <ComboBoxItem Tag="chatgpt">ChatGPT subscription (Codex login)</ComboBoxItem>
+                  <ComboBoxItem Tag="claude">Claude subscription (Claude Code login)</ComboBoxItem>
+                  <ComboBoxItem Tag="openai">OpenAI-compatible API</ComboBoxItem>
+                </ComboBox>
+              </Grid>
+
+              <StackPanel x:Name="OllamaPanel">
+                <Grid Margin="0,0,0,8">
+                  <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="110"/>
+                    <ColumnDefinition Width="*"/>
+                  </Grid.ColumnDefinitions>
+                  <TextBlock Text="Server URL" Style="{StaticResource RowLabel}"/>
+                  <TextBox x:Name="OllamaUrlBox" Grid.Column="1"/>
+                </Grid>
+                <Grid>
+                  <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="110"/>
+                    <ColumnDefinition Width="*"/>
+                  </Grid.ColumnDefinitions>
+                  <TextBlock Text="Model" Style="{StaticResource RowLabel}"/>
+                  <ComboBox x:Name="OllamaModelBox" Grid.Column="1" IsEditable="True"/>
+                </Grid>
+              </StackPanel>
+
+              <StackPanel x:Name="ChatgptPanel">
+                <Grid Margin="0,0,0,8">
+                  <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="110"/>
+                    <ColumnDefinition Width="*"/>
+                  </Grid.ColumnDefinitions>
+                  <TextBlock Text="Model" Style="{StaticResource RowLabel}"/>
+                  <ComboBox x:Name="ChatgptModelBox" Grid.Column="1"/>
+                </Grid>
+                <Grid Margin="0,0,0,8">
+                  <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="110"/>
+                    <ColumnDefinition Width="*"/>
+                  </Grid.ColumnDefinitions>
+                  <TextBlock Text="Reasoning" Style="{StaticResource RowLabel}"/>
+                  <ComboBox x:Name="ChatgptEffortBox" Grid.Column="1"/>
+                </Grid>
+                <TextBlock Style="{StaticResource Caption}"
+                           Text="Low reasoning is ~3x faster for short rewrites. gpt-5.4-mini is the fastest model (~1s)."/>
+                <Border Style="{StaticResource StatusBox}">
+                  <TextBlock x:Name="CodexStatusLabel" FontSize="11.5" TextWrapping="Wrap"
+                             Foreground="{DynamicResource Muted}"/>
+                </Border>
+              </StackPanel>
+
+              <StackPanel x:Name="ClaudePanel">
+                <Grid Margin="0,0,0,8">
+                  <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="110"/>
+                    <ColumnDefinition Width="*"/>
+                  </Grid.ColumnDefinitions>
+                  <TextBlock Text="Model" Style="{StaticResource RowLabel}"/>
+                  <ComboBox x:Name="ClaudeModelBox" Grid.Column="1" IsEditable="True"/>
+                </Grid>
+                <TextBlock Style="{StaticResource Caption}"
+                           Text="Uses your Claude Code subscription — no API key. Slower than API backends (~8-10s per rewrite; streaming softens it)."/>
+                <Border Style="{StaticResource StatusBox}">
+                  <TextBlock x:Name="ClaudeStatusLabel" FontSize="11.5" TextWrapping="Wrap"
+                             Foreground="{DynamicResource Muted}"/>
+                </Border>
+              </StackPanel>
+
+              <StackPanel x:Name="OpenaiPanel">
+                <Grid Margin="0,0,0,8">
+                  <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="110"/>
+                    <ColumnDefinition Width="*"/>
+                  </Grid.ColumnDefinitions>
+                  <TextBlock Text="Base URL" Style="{StaticResource RowLabel}"/>
+                  <TextBox x:Name="ApiBaseBox" Grid.Column="1"/>
+                </Grid>
+                <Grid Margin="0,0,0,8">
+                  <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="110"/>
+                    <ColumnDefinition Width="*"/>
+                  </Grid.ColumnDefinitions>
+                  <TextBlock Text="API key" Style="{StaticResource RowLabel}"/>
+                  <PasswordBox x:Name="ApiKeyBox" Grid.Column="1"/>
+                </Grid>
+                <Grid Margin="0,0,0,8">
+                  <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="110"/>
+                    <ColumnDefinition Width="*"/>
+                  </Grid.ColumnDefinitions>
+                  <TextBlock Text="Model" Style="{StaticResource RowLabel}"/>
+                  <TextBox x:Name="ApiModelBox" Grid.Column="1"/>
+                </Grid>
+                <TextBlock Style="{StaticResource Caption}"
+                           Text="OpenRouter: base https://openrouter.ai/api/v1, model needs a vendor prefix (e.g. openai/gpt-4o-mini). OpenAI: base https://api.openai.com."/>
+              </StackPanel>
+            </StackPanel>
+          </Border>
+
+          <Border Style="{StaticResource Card}">
+            <StackPanel>
+              <TextBlock Text="Defaults" Style="{StaticResource CardTitle}"/>
+              <Grid Margin="0,0,0,10">
+                <Grid.ColumnDefinitions>
+                  <ColumnDefinition Width="110"/>
+                  <ColumnDefinition Width="*"/>
+                </Grid.ColumnDefinitions>
+                <TextBlock Text="Default tone" Style="{StaticResource RowLabel}"/>
+                <ComboBox x:Name="ToneBox" Grid.Column="1" HorizontalAlignment="Left" MinWidth="180">
+                  <ComboBoxItem>Clean</ComboBoxItem>
+                  <ComboBoxItem>Professional</ComboBoxItem>
+                  <ComboBoxItem>Casual</ComboBoxItem>
+                  <ComboBoxItem>Blunt</ComboBoxItem>
+                </ComboBox>
+              </Grid>
+              <Grid>
+                <Grid.ColumnDefinitions>
+                  <ColumnDefinition Width="110"/>
+                  <ColumnDefinition Width="*"/>
+                </Grid.ColumnDefinitions>
+                <TextBlock Text="Variants" Style="{StaticResource RowLabel}"/>
+                <ComboBox x:Name="CountBox" Grid.Column="1" HorizontalAlignment="Left" MinWidth="80">
+                  <ComboBoxItem>1</ComboBoxItem>
+                  <ComboBoxItem>2</ComboBoxItem>
+                  <ComboBoxItem>3</ComboBoxItem>
+                  <ComboBoxItem>4</ComboBoxItem>
+                  <ComboBoxItem>5</ComboBoxItem>
+                </ComboBox>
+              </Grid>
+            </StackPanel>
+          </Border>
+        </StackPanel>
+      </ScrollViewer>
+
+      <!-- ===== TRIGGERS ===== -->
+      <ScrollViewer x:Name="TriggersScroll" Grid.Row="0" VerticalScrollBarVisibility="Auto"
+                    Padding="24,22" Visibility="Collapsed">
+        <StackPanel>
+          <TextBlock Text="Triggers" Style="{StaticResource SectionTitle}"/>
+          <TextBlock Text="How you invoke Cleanup and the popup's look."
+                     Style="{StaticResource SectionDesc}" Margin="0,3,0,16"/>
+
+          <Border Style="{StaticResource Card}">
+            <StackPanel>
+              <TextBlock Text="Hotkeys" Style="{StaticResource CardTitle}"/>
+              <Grid Margin="0,0,0,8">
+                <Grid.ColumnDefinitions>
+                  <ColumnDefinition Width="110"/>
+                  <ColumnDefinition Width="*"/>
+                </Grid.ColumnDefinitions>
+                <TextBlock Text="Popup hotkey" Style="{StaticResource RowLabel}"/>
+                <TextBox x:Name="HotkeyBox" Grid.Column="1" IsReadOnly="True" Cursor="Hand"
+                         PreviewKeyDown="Hotkey_KeyDown" GotFocus="Hotkey_GotFocus"/>
+              </Grid>
+              <Grid>
+                <Grid.ColumnDefinitions>
+                  <ColumnDefinition Width="110"/>
+                  <ColumnDefinition Width="*"/>
+                </Grid.ColumnDefinitions>
+                <TextBlock Text="Instant hotkey" Style="{StaticResource RowLabel}"/>
+                <TextBox x:Name="HotkeyBox2" Grid.Column="1" IsReadOnly="True" Cursor="Hand"
+                         PreviewKeyDown="Hotkey2_KeyDown" GotFocus="Hotkey2_GotFocus"/>
+              </Grid>
+              <TextBlock x:Name="TriggerHint" Style="{StaticResource Caption}"/>
+            </StackPanel>
+          </Border>
+
+          <Border Style="{StaticResource Card}">
+            <StackPanel>
+              <TextBlock Text="Selection buttons" Style="{StaticResource CardTitle}"/>
+              <CheckBox x:Name="FloatingButtonCheck"
+                        Content="Show buttons when I select text with the mouse"
+                        Checked="FloatingButton_Changed" Unchecked="FloatingButton_Changed"/>
+              <!-- Per-chip toggles; the whole panel greys out when the master is unchecked. -->
+              <StackPanel x:Name="ChipTogglesPanel" Margin="18,4,0,4">
+                <CheckBox x:Name="ChipStarCheck" Content="✦ Clean up (opens the popup)"/>
+                <CheckBox x:Name="ChipBoltCheck">
+                  <TextBlock><Run FontFamily="Segoe Fluent Icons,Segoe MDL2 Assets" Text="&#xE945;"/><Run Text="  Instant rewrite"/></TextBlock>
+                </CheckBox>
+                <CheckBox x:Name="ChipAgentCheck">
+                  <TextBlock><Run FontFamily="Segoe Fluent Icons,Segoe MDL2 Assets" Text="&#xE99A;"/><Run Text="  Agent mode"/></TextBlock>
+                </CheckBox>
+                <CheckBox x:Name="ChipSnipCheck">
+                  <TextBlock><Run FontFamily="Segoe Fluent Icons,Segoe MDL2 Assets" Text="&#xE8C6;"/><Run Text="  Snip → Agent (screenshot a region)"/></TextBlock>
+                </CheckBox>
+              </StackPanel>
+              <Grid Margin="0,6,0,0">
+                <Grid.ColumnDefinitions>
+                  <ColumnDefinition Width="110"/>
+                  <ColumnDefinition Width="*"/>
+                  <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
+                <TextBlock Text="Button size" Style="{StaticResource RowLabel}"/>
+                <Slider x:Name="ButtonSizeSlider" Grid.Column="1" Minimum="22" Maximum="48"
+                        TickFrequency="1" IsSnapToTickEnabled="True" VerticalAlignment="Center"
+                        ValueChanged="ButtonSize_Changed"/>
+                <TextBlock x:Name="ButtonSizeValue" Grid.Column="2" MinWidth="34"
+                           Foreground="{DynamicResource Text}"
+                           TextAlignment="Right" VerticalAlignment="Center" Margin="8,0,0,0"/>
+              </Grid>
+            </StackPanel>
+          </Border>
+
+          <Border Style="{StaticResource Card}">
+            <StackPanel>
+              <TextBlock Text="Popup" Style="{StaticResource CardTitle}"/>
+              <Grid Margin="0,0,0,4">
+                <Grid.ColumnDefinitions>
+                  <ColumnDefinition Width="110"/>
+                  <ColumnDefinition Width="*"/>
+                  <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
+                <TextBlock Text="Popup text size" Style="{StaticResource RowLabel}"/>
+                <Slider x:Name="FontSizeSlider" Grid.Column="1" Minimum="11" Maximum="18"
+                        TickFrequency="1" IsSnapToTickEnabled="True" VerticalAlignment="Center"
+                        ValueChanged="FontSize_Changed"/>
+                <TextBlock x:Name="FontSizeValue" Grid.Column="2" MinWidth="34"
+                           Foreground="{DynamicResource Text}"
+                           TextAlignment="Right" VerticalAlignment="Center" Margin="8,0,0,0"/>
+              </Grid>
+              <CheckBox x:Name="AutoCloseCheck" Content="Auto-close when clicking away"/>
+            </StackPanel>
+          </Border>
+        </StackPanel>
+      </ScrollViewer>
+
+      <!-- ===== AGENT ===== -->
+      <ScrollViewer x:Name="AgentScroll" Grid.Row="0" VerticalScrollBarVisibility="Auto"
+                    Padding="24,22" Visibility="Collapsed">
+        <StackPanel>
+          <TextBlock Text="Agent" Style="{StaticResource SectionTitle}"/>
+          <TextBlock Text="An agent that can actually do work — independent of the rewrite backend."
+                     Style="{StaticResource SectionDesc}" Margin="0,3,0,16"/>
+
+          <Border Style="{StaticResource Card}">
+            <StackPanel>
+              <TextBlock Text="Engine &amp; permissions" Style="{StaticResource CardTitle}"/>
+              <Grid Margin="0,0,0,8">
+                <Grid.ColumnDefinitions>
+                  <ColumnDefinition Width="110"/>
+                  <ColumnDefinition Width="*"/>
+                </Grid.ColumnDefinitions>
+                <TextBlock Text="Engine" Style="{StaticResource RowLabel}"/>
+                <ComboBox x:Name="AgentEngineBox" Grid.Column="1" SelectionChanged="AgentEngine_Changed">
+                  <ComboBoxItem Tag="codex">Codex (ChatGPT login)</ComboBoxItem>
+                  <ComboBoxItem Tag="claude">Claude (Claude Code login)</ComboBoxItem>
+                </ComboBox>
+              </Grid>
+              <TextBlock Style="{StaticResource Caption}" Margin="0,0,0,8"
+                         Text="More engines coming soon (Ollama, API keys)."/>
+              <Grid Margin="0,0,0,8">
+                <Grid.ColumnDefinitions>
+                  <ColumnDefinition Width="110"/>
+                  <ColumnDefinition Width="*"/>
+                </Grid.ColumnDefinitions>
+                <TextBlock Text="Model" Style="{StaticResource RowLabel}"/>
+                <ComboBox x:Name="AgentModelBox" Grid.Column="1" IsEditable="True"/>
+              </Grid>
+              <Grid Margin="0,0,0,8">
+                <Grid.ColumnDefinitions>
+                  <ColumnDefinition Width="110"/>
+                  <ColumnDefinition Width="*"/>
+                </Grid.ColumnDefinitions>
+                <TextBlock Text="Permissions" Style="{StaticResource RowLabel}"/>
+                <ComboBox x:Name="AgentPermBox" Grid.Column="1" SelectionChanged="AgentPerm_Changed">
+                  <ComboBoxItem Tag="safe">Safe — read &amp; analyze only</ComboBoxItem>
+                  <ComboBoxItem Tag="standard">Standard — can edit files</ComboBoxItem>
+                  <ComboBoxItem Tag="full">Full — no sandbox (dangerous)</ComboBoxItem>
+                </ComboBox>
+              </Grid>
+              <TextBlock x:Name="AgentWarnLabel" FontSize="11.5" FontWeight="SemiBold" TextWrapping="Wrap"
+                         Margin="0,0,0,4" Visibility="Collapsed" Foreground="#F0883E"
+                         Text="Full gives the agent unrestricted access to your machine. Use only when you trust the task."/>
+              <Border Style="{StaticResource StatusBox}">
+                <TextBlock x:Name="AgentStatusLabel" FontSize="11.5" TextWrapping="Wrap"
+                           Foreground="{DynamicResource Muted}"/>
+              </Border>
+            </StackPanel>
+          </Border>
+
+          <Border Style="{StaticResource Card}">
+            <StackPanel>
+              <TextBlock Text="Personal context" Style="{StaticResource CardTitle}"/>
+              <TextBlock Style="{StaticResource Caption}" Margin="0,0,0,8"
+                         Text="Things the agent should know about you (pasted ChatGPT memories work great here). Applies to all projects."/>
+              <TextBox x:Name="AgentContextBox" Height="110"
+                       AcceptsReturn="True" TextWrapping="Wrap"
+                       VerticalScrollBarVisibility="Auto" VerticalContentAlignment="Top"/>
+            </StackPanel>
+          </Border>
+
+          <Border Style="{StaticResource Card}">
+            <StackPanel>
+              <TextBlock Text="Voice" Style="{StaticResource CardTitle}"/>
+              <Grid Margin="0,0,0,8">
+                <Grid.ColumnDefinitions>
+                  <ColumnDefinition Width="120"/>
+                  <ColumnDefinition Width="*"/>
+                </Grid.ColumnDefinitions>
+                <TextBlock Text="Transcription" Style="{StaticResource RowLabel}"/>
+                <ComboBox x:Name="VoiceASRBox" Grid.Column="1">
+                  <ComboBoxItem Tag="system">Windows built-in</ComboBoxItem>
+                  <ComboBoxItem Tag="parakeet">Parakeet (local)</ComboBoxItem>
+                </ComboBox>
+              </Grid>
+              <TextBlock Style="{StaticResource Caption}" Margin="0,0,0,8"
+                         Text="The agent-window mic. Parakeet records then transcribes locally (far more accurate than the built-in dictation); it falls back to Windows built-in when the local engine isn't installed."/>
+              <Grid Margin="0,0,0,8">
+                <Grid.ColumnDefinitions>
+                  <ColumnDefinition Width="120"/>
+                  <ColumnDefinition Width="*"/>
+                  <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
+                <TextBlock Text="Speech output" Style="{StaticResource RowLabel}"/>
+                <ComboBox x:Name="VoiceTTSBox" Grid.Column="1" Margin="0,0,8,0">
+                  <ComboBoxItem Tag="system">System voice</ComboBoxItem>
+                  <ComboBoxItem Tag="kokoro">Kokoro (local)</ComboBoxItem>
+                </ComboBox>
+                <Button x:Name="VoiceTestBtn" Grid.Column="2" Content="Test voice"
+                        Style="{StaticResource Btn}" Click="VoiceTest_Click"/>
+              </Grid>
+              <TextBlock x:Name="VoiceTestStatus" Style="{StaticResource Caption}" Margin="0,0,0,8"
+                         Text="Used by Whiteboard spoken replies. Kokoro runs locally; System voice needs no setup."/>
+              <Grid Margin="0,2,0,0">
+                <Grid.ColumnDefinitions>
+                  <ColumnDefinition Width="120"/>
+                  <ColumnDefinition Width="*"/>
+                  <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
+                <TextBlock Text="Local engines" Style="{StaticResource RowLabel}"/>
+                <TextBlock Grid.Column="1" Style="{StaticResource Caption}" Margin="0,0,8,0"
+                           VerticalAlignment="Center"
+                           Text="Parakeet ASR + Kokoro TTS in a managed Python environment (~2 GB, downloaded once)."/>
+                <Button x:Name="VoiceInstallBtn" Grid.Column="2" Content="Install local voice engines"
+                        Style="{StaticResource Btn}" VerticalAlignment="Top" Click="VoiceInstall_Click"/>
+              </Grid>
+              <Border Style="{StaticResource StatusBox}">
+                <TextBlock x:Name="VoiceStatusLabel" FontSize="11.5" TextWrapping="Wrap"
+                           Foreground="{DynamicResource Muted}"/>
+              </Border>
+            </StackPanel>
+          </Border>
+        </StackPanel>
+      </ScrollViewer>
+
+      <!-- ===== ABOUT ===== -->
+      <ScrollViewer x:Name="AboutScroll" Grid.Row="0" VerticalScrollBarVisibility="Auto"
+                    Padding="24,22" Visibility="Collapsed">
+        <StackPanel>
+          <TextBlock Text="About" Style="{StaticResource SectionTitle}"/>
+          <TextBlock Text="Version and updates." Style="{StaticResource SectionDesc}" Margin="0,3,0,16"/>
+
+          <Border Style="{StaticResource Card}">
+            <StackPanel>
+              <Grid Margin="0,0,0,4">
+                <Grid.ColumnDefinitions>
+                  <ColumnDefinition Width="110"/>
+                  <ColumnDefinition Width="*"/>
+                  <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
+                <TextBlock Text="Version" Style="{StaticResource RowLabel}"/>
+                <TextBlock x:Name="VersionLabel" Grid.Column="1" VerticalAlignment="Center"
+                           Foreground="{DynamicResource Text}"/>
+                <Button x:Name="UpdateBtn" Grid.Column="2" Content="Check for updates"
+                        Style="{StaticResource Btn}" Click="Update_Click"/>
+              </Grid>
+              <TextBlock x:Name="UpdateStatus" Style="{StaticResource Caption}" Visibility="Collapsed"/>
+              <TextBlock Style="{StaticResource Caption}" Margin="0,10,0,0"
+                         Text="Source: github.com/AbhiPoluri/cleanup-app"/>
+            </StackPanel>
+          </Border>
+        </StackPanel>
+      </ScrollViewer>
+
+      <!-- pinned footer: Save is always reachable regardless of section / scroll -->
+      <Border x:Name="Footer" Grid.Row="1" BorderThickness="0,1,0,0" Padding="24,10">
+        <Button x:Name="SaveBtn" Content="Save" Width="96" HorizontalAlignment="Right"
+                Padding="0,6" Click="Save_Click" Cursor="Hand"/>
+      </Border>
     </Grid>
-    <Grid Margin="0,0,0,8">
-      <Grid.ColumnDefinitions>
-        <ColumnDefinition Width="110"/>
-        <ColumnDefinition Width="*"/>
-      </Grid.ColumnDefinitions>
-      <TextBlock Text="Default variants" VerticalAlignment="Center"/>
-      <ComboBox x:Name="CountBox" Grid.Column="1">
-        <ComboBoxItem>1</ComboBoxItem>
-        <ComboBoxItem>2</ComboBoxItem>
-        <ComboBoxItem>3</ComboBoxItem>
-        <ComboBoxItem>4</ComboBoxItem>
-        <ComboBoxItem>5</ComboBoxItem>
-      </ComboBox>
-    </Grid>
-
-    <Grid Margin="0,0,0,8">
-      <Grid.ColumnDefinitions>
-        <ColumnDefinition Width="110"/>
-        <ColumnDefinition Width="*"/>
-      </Grid.ColumnDefinitions>
-      <TextBlock Text="Popup hotkey" VerticalAlignment="Center"/>
-      <TextBox x:Name="HotkeyBox" Grid.Column="1" IsReadOnly="True" Cursor="Hand"
-               PreviewKeyDown="Hotkey_KeyDown" GotFocus="Hotkey_GotFocus"/>
-    </Grid>
-
-    <Grid Margin="0,0,0,8">
-      <Grid.ColumnDefinitions>
-        <ColumnDefinition Width="110"/>
-        <ColumnDefinition Width="*"/>
-      </Grid.ColumnDefinitions>
-      <TextBlock Text="Instant hotkey" VerticalAlignment="Center"/>
-      <TextBox x:Name="HotkeyBox2" Grid.Column="1" IsReadOnly="True" Cursor="Hand"
-               PreviewKeyDown="Hotkey2_KeyDown" GotFocus="Hotkey2_GotFocus"/>
-    </Grid>
-
-    <CheckBox x:Name="FloatingButtonCheck" Margin="0,0,0,6"
-              Content="Show buttons when I select text with the mouse"
-              Checked="FloatingButton_Changed" Unchecked="FloatingButton_Changed"/>
-    <!-- Per-chip toggles; the whole panel greys out when the master is unchecked. -->
-    <StackPanel x:Name="ChipTogglesPanel" Margin="18,0,0,8">
-      <CheckBox x:Name="ChipStarCheck" Margin="0,0,0,4"
-                Content="✦ Clean up (opens the popup)"/>
-      <CheckBox x:Name="ChipBoltCheck" Margin="0,0,0,4"
-                Content="⚡ Instant rewrite"/>
-      <CheckBox x:Name="ChipAgentCheck"
-                Content="🤖 Agent mode"/>
-    </StackPanel>
-
-    <Grid Margin="0,0,0,8">
-      <Grid.ColumnDefinitions>
-        <ColumnDefinition Width="110"/>
-        <ColumnDefinition Width="*"/>
-        <ColumnDefinition Width="Auto"/>
-      </Grid.ColumnDefinitions>
-      <TextBlock Text="Button size" VerticalAlignment="Center"/>
-      <Slider x:Name="ButtonSizeSlider" Grid.Column="1" Minimum="22" Maximum="48"
-              TickFrequency="1" IsSnapToTickEnabled="True" VerticalAlignment="Center"
-              ValueChanged="ButtonSize_Changed"/>
-      <TextBlock x:Name="ButtonSizeValue" Grid.Column="2" MinWidth="34"
-                 TextAlignment="Right" VerticalAlignment="Center" Margin="8,0,0,0"/>
-    </Grid>
-
-    <Grid Margin="0,0,0,8">
-      <Grid.ColumnDefinitions>
-        <ColumnDefinition Width="110"/>
-        <ColumnDefinition Width="*"/>
-        <ColumnDefinition Width="Auto"/>
-      </Grid.ColumnDefinitions>
-      <TextBlock Text="Popup text size" VerticalAlignment="Center"/>
-      <Slider x:Name="FontSizeSlider" Grid.Column="1" Minimum="11" Maximum="18"
-              TickFrequency="1" IsSnapToTickEnabled="True" VerticalAlignment="Center"
-              ValueChanged="FontSize_Changed"/>
-      <TextBlock x:Name="FontSizeValue" Grid.Column="2" MinWidth="34"
-                 TextAlignment="Right" VerticalAlignment="Center" Margin="8,0,0,0"/>
-    </Grid>
-
-    <CheckBox x:Name="AutoCloseCheck" Margin="0,0,0,8"
-              Content="Auto-close when clicking away"/>
-
-    <TextBlock x:Name="TriggerHint"
-               FontSize="11" Foreground="Gray" Margin="0,4,0,12" TextWrapping="Wrap"/>
-
-    <Separator Margin="0,4,0,8"/>
-
-    <Grid Margin="0,0,0,4">
-      <Grid.ColumnDefinitions>
-        <ColumnDefinition Width="110"/>
-        <ColumnDefinition Width="*"/>
-        <ColumnDefinition Width="Auto"/>
-      </Grid.ColumnDefinitions>
-      <TextBlock Text="Version" VerticalAlignment="Center"/>
-      <TextBlock x:Name="VersionLabel" Grid.Column="1" VerticalAlignment="Center"/>
-      <Button x:Name="UpdateBtn" Grid.Column="2" Content="Check for updates"
-              Padding="10,4" Click="Update_Click"/>
-    </Grid>
-    <TextBlock x:Name="UpdateStatus" FontSize="11" Foreground="Gray" Margin="0,0,0,12"
-               TextWrapping="Wrap" Visibility="Collapsed"/>
-
-    <Button x:Name="SaveBtn" Content="Save" Width="90" HorizontalAlignment="Right"
-            Padding="0,5" Click="Save_Click"/>
-  </StackPanel>
+  </Grid>
 </Window>

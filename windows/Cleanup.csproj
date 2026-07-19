@@ -23,5 +23,16 @@
          Microsoft-owned; Windows-only at runtime (init is wrapped so a missing
          mic/recognizer just disables the mic button). -->
     <PackageReference Include="System.Speech" Version="8.0.0" />
+    <!-- Windows Whiteboard: webcam capture + perspective correction, and AAC/WAV
+         conversion for iPhone hold-to-talk uploads. -->
+    <PackageReference Include="OpenCvSharp4.Windows" Version="4.13.0.20260627" />
+    <PackageReference Include="NAudio" Version="2.3.0" />
+    <PackageReference Include="QRCoder" Version="1.8.0" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- In-process Kestrel HTTPS server for the token-protected iPhone remote. Unlike
+         HttpListener HTTPS, this needs no admin-only netsh certificate binding. -->
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
   </ItemGroup>
 </Project>

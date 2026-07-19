@@ -25,6 +25,8 @@ cat > "$OUT/Contents/Info.plist" << 'PLIST'
     <true/>
     <key>NSPrincipalClass</key>
     <string>NSApplication</string>
+    <key>NSCameraUsageDescription</key>
+    <string>Cleanup uses the camera to watch your whiteboard in Whiteboard mode.</string>
     <key>NSMicrophoneUsageDescription</key>
     <string>Cleanup uses the microphone for voice input in Agent mode.</string>
     <key>NSSpeechRecognitionUsageDescription</key>
@@ -57,6 +59,20 @@ swiftc "$DIR/Cleanup.swift" \
     -o "$MACOS/Cleanup" \
     -framework Cocoa \
     -framework SwiftUI
+
+# Sign with a STABLE identity when one exists ("Cleanup Dev Signing", self-signed,
+# created once in the login keychain). Without this every rebuild is a brand-new
+# app to macOS TCC — Accessibility/mic/camera/speech grants reset on every install
+# and the user gets permission-prompted forever. Ad-hoc fallback keeps builds
+# working on machines without the cert.
+if security find-identity -v -p codesigning 2>/dev/null | grep -q "Cleanup Dev Signing"; then
+    codesign --force --deep -s "Cleanup Dev Signing" \
+        --identifier com.abhiram.cleanup "$OUT"
+    echo "Signed: Cleanup Dev Signing (TCC grants persist across rebuilds)"
+else
+    codesign --force --deep -s - --identifier com.abhiram.cleanup "$OUT" 2>/dev/null || true
+    echo "Signed: ad-hoc (no 'Cleanup Dev Signing' cert — permission grants will reset each rebuild)"
+fi
 
 echo "Built: $OUT"
 

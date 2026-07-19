@@ -419,7 +419,7 @@ internal sealed class VariantCard
         _dots.Visibility = Visibility.Collapsed;
         _doneStack.Visibility = Visibility.Collapsed;
         _state = CardState.Error;
-        _error.Text = "⚠ " + msg + " — check Settings";
+        _error.Text = "⚠ " + msg + " — see Health in Settings";
         _error.Visibility = Visibility.Visible;
         _error.Opacity = 0;
         Anim.OpacityTo(_error, 1, 140);

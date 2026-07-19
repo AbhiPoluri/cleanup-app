@@ -34,6 +34,10 @@ public static class Updater
     // Label for the tray tooltip / settings row.
     public static string DisplayVersion => IsDevBuild ? "dev" : "v" + CurrentVersion;
 
+    // Human summary of the most recent CheckAsync outcome, for the Health panel.
+    // Null until the first check this session.
+    public static string? LastCheckSummary { get; private set; }
+
     private static string ReadCurrentVersion()
     {
         try
@@ -84,12 +88,16 @@ public static class Updater
                 $"https://github.com/{Repo}/releases/download/{result.LatestVersion}/{AssetName}";
 
             result.UpdateAvailable = IsNewer(result.LatestVersion);
+            LastCheckSummary = (result.UpdateAvailable
+                ? $"{result.LatestVersion} available"
+                : "up to date") + $" (checked {DateTime.Now:HH:mm})";
             Log.Write($"updater: current={CurrentVersion} latest={result.LatestVersion} " +
                       $"available={result.UpdateAvailable}");
         }
         catch (Exception ex)
         {
             result.Error = ex.Message;
+            LastCheckSummary = $"check failed (checked {DateTime.Now:HH:mm})";
             Log.Write("updater: check failed — " + ex.Message);
         }
         return result;

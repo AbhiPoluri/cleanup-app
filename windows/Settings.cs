@@ -22,6 +22,9 @@ public class Settings
     public string ClaudeModel { get; set; } = "haiku";
     public string DefaultTone { get; set; } = "Clean";
     public int DefaultCount { get; set; } = 3;
+    // First-run welcome shown yet? Drives the one-time onboarding window on launch;
+    // reopenable any time via the tray "Welcome & health…" item.
+    public bool DidOnboard { get; set; } = false;
 
     // ---- Agent mode (independent of the rewrite Backend above) ----
     // Which agent CLI to spin up. "" = not yet chosen → ResolvedAgentEngine falls
@@ -35,9 +38,32 @@ public class Settings
     // Permission tier: "safe" (read/analyze only), "standard" (can edit files),
     // "full" (no sandbox — dangerous). Sandboxed by default.
     public string AgentPermission { get; set; } = "safe";
+    // Personal context the agent should know about the user (pasted ChatGPT memories work
+    // well). GLOBAL — written into EVERY project's CLAUDE.md / AGENTS.md on save + app start.
+    public string AgentContext { get; set; } = "";
+    // ---- Local voice engines (optional; venv at Documents\Cleanup\voice) ----
+    // Transcription engine for the agent-window mic: "system" (Windows built-in
+    // System.Speech dictation) or "parakeet" (local onnx-asr, record-then-transcribe).
+    // Falls back to system when Parakeet is selected but the venv/helper isn't ready.
+    public string VoiceASR { get; set; } = "system";
+    // Speech-output engine used by Whiteboard: "system" or "kokoro" (local).
+    public string VoiceTTS { get; set; } = "system";
+    public string KokoroVoice { get; set; } = "af_heart";
+    // Slug of the project agent windows + the whiteboard use as their working directory.
+    // Persists across sessions; "default" is always present.
+    public string CurrentProject { get; set; } = "default";
     // Last agent-window size (DIPs), restored on next open, clamped to the mins.
     public double AgentWidth { get; set; } = 560;
     public double AgentHeight { get; set; } = 640;
+    // ---- Whiteboard mode ----
+    public double WhiteboardWidth { get; set; } = 1040;
+    public double WhiteboardHeight { get; set; } = 700;
+    public int WhiteboardCamera { get; set; } = 0;
+    // Normalized TL,TR,BR,BL points (x,y pairs) for perspective correction.
+    public double[] WhiteboardCorners { get; set; } = { .08, .10, .92, .10, .92, .90, .08, .90 };
+    public bool WhiteboardMuted { get; set; } = false;
+    public bool WhiteboardMic { get; set; } = true;
+    public bool WhiteboardSounds { get; set; } = true;
     public bool FloatingButton { get; set; } = true;
     // Per-chip enable toggles for the floating selection bar (master = FloatingButton
     // above). All default on; each hides its chip when off. ChipAgent additionally
@@ -45,6 +71,8 @@ public class Settings
     public bool ChipStar { get; set; } = true;
     public bool ChipBolt { get; set; } = true;
     public bool ChipAgent { get; set; } = true;
+    // ✂ snip chip — screenshot a region → agent. Doesn't need the agent CLI to appear.
+    public bool ChipSnip { get; set; } = true;
     // inline diff panel toggle — persists across popup opens
     public bool DiffView { get; set; } = false;
     // click-away dismissal — OFF by default (popup stays open until Esc / ✕ / Copy / Replace)
@@ -56,6 +84,9 @@ public class Settings
     // last popup size (DIPs) — restored on next open; clamped to the mins below
     public double PopupWidth { get; set; } = 640;
     public double PopupHeight { get; set; } = 540;
+    // last Settings window size (DIPs) — restored on next open, clamped to the mins.
+    public double SettingsWidth { get; set; } = 760;
+    public double SettingsHeight { get; set; } = 560;
     // Win32 MOD_* flags happen to match WPF ModifierKeys values (Alt=1, Ctrl=2, Shift=4, Win=8)
     public uint HotkeyModifiers { get; set; } = 0x2 | 0x4; // Ctrl+Shift
     public uint HotkeyKey { get; set; } = 0x45;            // E

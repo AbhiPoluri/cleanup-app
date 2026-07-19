@@ -806,6 +806,43 @@ public static class Llm
         }
     }
 
+    // Structured Codex/ChatGPT token health for the Health panel and the chatgpt
+    // backend row. Same JWT-exp read as CodexStatus, but graded green/amber/red with
+    // a days-to-expiry one-liner. NeedsLogin flags the rows that should offer a
+    // `codex login` / `codex` fix affordance.
+    internal static (HealthLevel Level, string Detail, bool NeedsLogin) CodexTokenHealth()
+    {
+        try
+        {
+            var authPath = Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".codex", "auth.json");
+            if (!File.Exists(authPath))
+                return (HealthLevel.Red, "not connected — run `codex login` in a terminal", true);
+            using var doc = JsonDocument.Parse(File.ReadAllText(authPath));
+            var token = doc.RootElement.GetProperty("tokens").GetProperty("access_token").GetString()!;
+            var parts = token.Split('.');
+            if (parts.Length < 2) return (HealthLevel.Amber, "login file unreadable — run `codex login` again", true);
+            var b64 = parts[1].Replace('-', '+').Replace('_', '/');
+            b64 += new string('=', (4 - b64.Length % 4) % 4);
+            using var payload = JsonDocument.Parse(Convert.FromBase64String(b64));
+            var exp = payload.RootElement.GetProperty("exp").GetDouble();
+            var secs = exp - DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+            if (secs <= 0) return (HealthLevel.Red, "expired — run `codex` in a terminal to refresh", true);
+            string plan = "";
+            if (payload.RootElement.TryGetProperty("https://api.openai.com/auth", out var auth) &&
+                auth.TryGetProperty("chatgpt_plan_type", out var p))
+                plan = $" ({p.GetString()} plan)";
+            double days = secs / 86400.0;
+            if (days < 2)
+            {
+                string left = secs < 3600 ? $"{Math.Max(1, (int)(secs / 60))}m" : $"{(int)(secs / 3600)}h";
+                return (HealthLevel.Amber, $"valid, expires in {left} — run `codex` soon{plan}", false);
+            }
+            return (HealthLevel.Green, $"valid, expires in {(int)days}d{plan}", false);
+        }
+        catch { return (HealthLevel.Amber, "could not read Codex login — run `codex login`", true); }
+    }
+
     // `claude --version` output, cached after the first successful read.
     private static string? _claudeVersion;
 

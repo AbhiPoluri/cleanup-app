@@ -8,11 +8,13 @@
   <!-- MouseLeftButtonDown on the Root background moves the window (drag anywhere);
        clicks that originate inside interactive controls are filtered out in code. -->
   <Border x:Name="Root" CornerRadius="12" BorderThickness="1" MouseLeftButtonDown="Root_MouseDown">
+    <Grid>
     <DockPanel>
       <!-- title bar -->
       <Grid DockPanel.Dock="Top" Margin="14,9,14,9">
         <Grid.ColumnDefinitions>
           <ColumnDefinition Width="*"/>
+          <ColumnDefinition Width="Auto"/>
           <ColumnDefinition Width="Auto"/>
           <ColumnDefinition Width="Auto"/>
           <ColumnDefinition Width="Auto"/>
@@ -24,10 +26,20 @@
           <TextBlock x:Name="AutoLabel" Text="⟳ auto" FontSize="11"/>
         </Border>
         <Border x:Name="ModelChip" Grid.Column="2" CornerRadius="5" BorderThickness="1"
-                Padding="8,3" Margin="0,0,8,0">
-          <TextBlock x:Name="ModelLabel" FontSize="11"/>
+                Padding="8,3" Margin="0,0,8,0" Cursor="Hand">
+          <StackPanel Orientation="Horizontal">
+            <TextBlock x:Name="ModelLabel" FontSize="11" VerticalAlignment="Center"/>
+            <TextBlock x:Name="ModelChipCaret" Text="&#xE70D;" FontSize="9"
+                       FontFamily="Segoe Fluent Icons,Segoe MDL2 Assets"
+                       VerticalAlignment="Center" Margin="4,1,0,0"/>
+          </StackPanel>
         </Border>
-        <Border x:Name="CloseBtn" Grid.Column="3" CornerRadius="5" BorderThickness="1"
+        <Border x:Name="HelpBtn" Grid.Column="3" CornerRadius="5" BorderThickness="1"
+                Padding="8,3" Margin="0,0,8,0" Cursor="Hand" MouseLeftButtonUp="Help_Click"
+                ToolTip="Shortcuts &amp; tips (?)">
+          <TextBlock x:Name="HelpLabel" Text="?" FontSize="11" FontWeight="SemiBold"/>
+        </Border>
+        <Border x:Name="CloseBtn" Grid.Column="4" CornerRadius="5" BorderThickness="1"
                 Padding="7,3" Cursor="Hand" MouseLeftButtonUp="Close_Click"
                 ToolTip="Close (Esc)">
           <TextBlock x:Name="CloseLabel" Text="✕" FontSize="11"/>
@@ -117,5 +129,18 @@
         </Border>
       </Grid>
     </DockPanel>
+
+    <!-- help overlay: dim scrim + centered mono cheat-sheet; click-away / Esc / ? closes.
+         Content is built + themed in code. -->
+    <Border x:Name="HelpOverlay" CornerRadius="12" Visibility="Collapsed"
+            MouseLeftButtonDown="HelpOverlay_Click">
+      <Border x:Name="HelpCard" CornerRadius="10" BorderThickness="1"
+              Padding="18,16" MaxWidth="420" MaxHeight="440"
+              HorizontalAlignment="Center" VerticalAlignment="Center"
+              MouseLeftButtonDown="HelpCard_Click">
+        <StackPanel x:Name="HelpContent"/>
+      </Border>
+    </Border>
+    </Grid>
   </Border>
 </Window>

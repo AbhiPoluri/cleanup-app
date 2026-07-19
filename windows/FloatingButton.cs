@@ -38,6 +38,7 @@ public sealed class SelectionWatcher : IDisposable
     private readonly Action _onClicked;   // ✦ chip → open the popup
     private readonly Action _onInstant;   // ⚡ chip → hands-free auto-replace
     private readonly Action _onAgent;     // 🤖 chip → spin up an agent on the selection
+    private readonly Action<SnipMode> _onSnip;  // ✂ chip → screenshot a region → agent
     private readonly Func<bool> _popupOpen;
     private readonly Func<bool> _autoMode;
     private readonly Action<string, IntPtr> _onAutoText;
@@ -48,12 +49,13 @@ public sealed class SelectionWatcher : IDisposable
     private uint _lastUpTime;
     private POINT _lastUpAt;
 
-    public SelectionWatcher(Action onClicked, Action onInstant, Action onAgent, Func<bool> popupOpen,
-                            Func<bool> autoMode, Action<string, IntPtr> onAutoText)
+    public SelectionWatcher(Action onClicked, Action onInstant, Action onAgent, Action<SnipMode> onSnip,
+                            Func<bool> popupOpen, Func<bool> autoMode, Action<string, IntPtr> onAutoText)
     {
         _onClicked = onClicked;
         _onInstant = onInstant;
         _onAgent = onAgent;
+        _onSnip = onSnip;
         _popupOpen = popupOpen;
         _autoMode = autoMode;
         _onAutoText = onAutoText;
@@ -164,6 +166,12 @@ public sealed class SelectionWatcher : IDisposable
                 Log.Write("floating 🤖 clicked");
                 HideButton();
                 _onAgent();
+            },
+            onSnip: mode =>
+            {
+                Log.Write($"floating ✂ clicked ({mode})");
+                HideButton();
+                _onSnip(mode);
             });
         Log.Write($"floating buttons shown near {screenX},{screenY}");
         _button.ShowNear(screenX, screenY);
@@ -200,6 +208,10 @@ public sealed class FloatingButtonWindow : Window
     // gap (DIP) between the two chips; scales with the chip size
     private static double GapDip => Math.Round(BtnDip * 0.2);
 
+    // Monochrome icon font for the bolt / robot / scissors chip glyphs. Segoe Fluent
+    // Icons on Win11, MDL2 fallback elsewhere — tints with the theme like text.
+    private static readonly FontFamily IconFont = new("Segoe Fluent Icons,Segoe MDL2 Assets");
+
     private readonly DispatcherTimer _autoHide = new() { Interval = TimeSpan.FromSeconds(4) };
     private readonly StackPanel _row;
     private readonly Border _star;
@@ -208,10 +220,12 @@ public sealed class FloatingButtonWindow : Window
     private readonly TextBlock _boltGlyph;
     private readonly Border _robot;
     private readonly TextBlock _robotGlyph;
+    private readonly Border _snip;
+    private readonly TextBlock _snipGlyph;
     private readonly ScaleTransform _scale = new(1, 1);
     private bool _hiding;
 
-    public FloatingButtonWindow(Action onStar, Action onBolt, Action onAgent)
+    public FloatingButtonWindow(Action onStar, Action onBolt, Action onAgent, Action<SnipMode> onSnip)
     {
         WindowStyle = WindowStyle.None;
         AllowsTransparency = true;
@@ -227,12 +241,16 @@ public sealed class FloatingButtonWindow : Window
         // all. The transparent gap between the rounded pills makes them read as
         // separate buttons. The 🤖 chip only appears when the selected agent engine's
         // CLI is available (decided per-appearance in ShowNear).
+        // ✦ stays a text glyph (brand). The rest are monochrome Segoe Fluent Icons
+        // glyphs (MDL2 fallback) that tint with the theme — no colour emoji.
         _star = MakeChip("✦", onStar, out _starGlyph);
-        _bolt = MakeChip("⚡", onBolt, out _boltGlyph);
-        _robot = MakeChip("🤖", onAgent, out _robotGlyph);
-        // user asked for a robot face; force a symbol font (renders mono where the
-        // glyph exists, colour emoji otherwise — an accepted, explicit exception).
-        _robotGlyph.FontFamily = new System.Windows.Media.FontFamily("Segoe UI Symbol");
+        _bolt = MakeChip("\uE945", onBolt, out _boltGlyph);   // LightningBolt
+        _boltGlyph.FontFamily = IconFont;
+        _robot = MakeChip("\uE99A", onAgent, out _robotGlyph); // Robot (agent chip)
+        _robotGlyph.FontFamily = IconFont;
+        // snip chip: left-click = area capture; right-click = area/window/full menu.
+        _snip = MakeSnipChip("\uE8C6", onSnip, out _snipGlyph); // Cut (scissors)
+        _snipGlyph.FontFamily = IconFont;
         _row = new StackPanel
         {
             Orientation = Orientation.Horizontal,
@@ -242,6 +260,7 @@ public sealed class FloatingButtonWindow : Window
         _row.Children.Add(_star);
         _row.Children.Add(_bolt);
         _row.Children.Add(_robot);
+        _row.Children.Add(_snip);
         Content = _row;
 
         _autoHide.Tick += (_, _) => { _autoHide.Stop(); HideButton(); };
@@ -276,6 +295,29 @@ public sealed class FloatingButtonWindow : Window
         return border;
     }
 
+    // The ✂ chip: left-click runs the area snip; right-click opens a small mono menu
+    // (Capture area / window / full screen). All paths funnel through onSnip(mode).
+    private Border MakeSnipChip(string glyph, Action<SnipMode> onSnip, out TextBlock glyphBlock)
+    {
+        var border = MakeChip(glyph, () => onSnip(SnipMode.Area), out glyphBlock);
+        var t = Theme.Detect();
+        var menu = new ContextMenu { Background = t.Surface, BorderBrush = t.LineStrong };
+        void Item(string header, SnipMode mode)
+        {
+            var mi = new MenuItem { Header = header, Foreground = t.Text, Background = t.Surface };
+            mi.Click += (_, e) => { e.Handled = true; onSnip(mode); };
+            menu.Items.Add(mi);
+        }
+        Item("Capture area", SnipMode.Area);
+        Item("Capture window", SnipMode.Window);
+        Item("Full screen", SnipMode.FullScreen);
+        // keep the bar alive while the menu is open; hide it once the menu dismisses
+        menu.Opened += (_, _) => _autoHide.Stop();
+        menu.Closed += (_, _) => HideButton();
+        border.ContextMenu = menu;
+        return border;
+    }
+
     protected override void OnSourceInitialized(EventArgs e)
     {
         base.OnSourceInitialized(e);
@@ -294,6 +336,7 @@ public sealed class FloatingButtonWindow : Window
         if (s.ChipStar) n++;
         if (s.ChipBolt) n++;
         if (s.ChipAgent && AgentEngine.SelectedCliAvailable()) n++;
+        if (s.ChipSnip) n++;
         return n;
     }
 
@@ -310,10 +353,12 @@ public sealed class FloatingButtonWindow : Window
         _bolt.Visibility = cfg.ChipBolt ? Visibility.Visible : Visibility.Collapsed;
         bool agent = cfg.ChipAgent && AgentEngine.SelectedCliAvailable();
         _robot.Visibility = agent ? Visibility.Visible : Visibility.Collapsed;
+        _snip.Visibility = cfg.ChipSnip ? Visibility.Visible : Visibility.Collapsed;
         var visible = new System.Collections.Generic.List<(Border chip, TextBlock gl)>();
         if (cfg.ChipStar) visible.Add((_star, _starGlyph));
         if (cfg.ChipBolt) visible.Add((_bolt, _boltGlyph));
         if (agent) visible.Add((_robot, _robotGlyph));
+        if (cfg.ChipSnip) visible.Add((_snip, _snipGlyph));
         if (visible.Count == 0) return;   // nothing to show (watcher guards this too)
 
         int chips = visible.Count;

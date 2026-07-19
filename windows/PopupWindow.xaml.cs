@@ -71,7 +71,7 @@ public partial class PopupWindow : Window
         RefineBox.FontSize = _fontSize;
         RefinePlaceholder.FontSize = _fontSize;
         VariantSlider.Value = _count;
-        ModelLabel.Text = Settings.Current.ModelLabel + " ▾";
+        ModelLabel.Text = Settings.Current.ModelLabel;
         ModelChip.MouseLeftButtonUp += (_, _) => AppController.OpenSettings();
         RefineBox.TextChanged += (_, _) =>
             RefinePlaceholder.Visibility = RefineBox.Text.Length == 0 ? Visibility.Visible : Visibility.Collapsed;
@@ -114,8 +114,10 @@ public partial class PopupWindow : Window
         Root.Background = _t.Surface;
         Root.BorderBrush = _t.LineStrong;
         TitleLabel.Foreground = _t.Muted;
+        ModelChip.Background = _t.Surface2;
         ModelChip.BorderBrush = _t.Line;
         ModelLabel.Foreground = _t.Faint;
+        ModelChipCaret.Foreground = _t.Faint;
         VariantsLabel.Foreground = _t.Faint;
         CountLabel.Foreground = _t.Text;
         ModeHint.Foreground = _t.Faint;
@@ -140,6 +142,14 @@ public partial class PopupWindow : Window
         // mono selection highlight — no system blue
         DiffBox.SelectionBrush = _t.Muted;
         DiffBox.SelectionOpacity = 0.35;
+        // help button (quiet outline, mirrors the other title-bar controls)
+        HelpBtn.Background = _t.Surface2;
+        HelpBtn.BorderBrush = _t.Line;
+        HelpLabel.Foreground = _t.Muted;
+        // help overlay: dim scrim + raised card
+        HelpOverlay.Background = new SolidColorBrush(Color.FromArgb(0xCC, 0, 0, 0));
+        HelpCard.Background = _t.Surface;
+        HelpCard.BorderBrush = _t.LineStrong;
         // close button (quiet outline, like the other title-bar controls)
         CloseBtn.Background = _t.Surface2;
         CloseBtn.BorderBrush = _t.Line;
@@ -401,6 +411,7 @@ public partial class PopupWindow : Window
                 ReferenceEquals(d, AutoBtn) ||
                 ReferenceEquals(d, DiffPanel) ||
                 ReferenceEquals(d, DiffBtn) || ReferenceEquals(d, PopOutBtn) ||
+                ReferenceEquals(d, HelpBtn) || ReferenceEquals(d, HelpOverlay) ||
                 ReferenceEquals(d, CloseBtn))
                 return true;
         }
@@ -428,6 +439,57 @@ public partial class PopupWindow : Window
     {
         e.Handled = true;
         SafeClose();
+    }
+
+    // ---------- help overlay ----------
+
+    private bool _helpOpen;
+
+    private void Help_Click(object sender, MouseButtonEventArgs e)
+    {
+        e.Handled = true;
+        ToggleHelp(!_helpOpen);
+    }
+
+    // clicking the dim scrim (but not the card) dismisses
+    private void HelpOverlay_Click(object sender, MouseButtonEventArgs e)
+    {
+        e.Handled = true;
+        ToggleHelp(false);
+    }
+
+    // clicks inside the card must not fall through to the scrim (and must not drag)
+    private void HelpCard_Click(object sender, MouseButtonEventArgs e) => e.Handled = true;
+
+    private void ToggleHelp(bool on)
+    {
+        if (on == _helpOpen) return;
+        _helpOpen = on;
+        if (on)
+        {
+            HelpSheet.Populate(HelpContent, _t, "Popup shortcuts", new (string, string)[]
+            {
+                ("chips", "pick a tone — Clean / Professional / Casual / Blunt, or type your own"),
+                ("slider · Ctrl+1–5", "number of variants, and select one"),
+                ("Ctrl+R", "regenerate all variants"),
+                ("Ctrl+D · ◫ diff", "toggle the inline diff of what changed"),
+                ("⧉ pop out", "open the red/green diff in its own window"),
+                ("tune it…", "refine the selected variant with an instruction"),
+                ("‹ › · Ctrl+←/→", "step a card's version history"),
+                ("⟳ auto", "re-capture new selections as you highlight them"),
+                ("Copy · Ctrl+↩", "copy, or Replace the original in place"),
+            });
+            HelpOverlay.Opacity = 0;
+            HelpOverlay.Visibility = Visibility.Visible;
+            Anim.OpacityTo(HelpOverlay, 1.0, 120);
+            Anim.FadeSlideIn(HelpCard, 8, 160);
+        }
+        else
+        {
+            var fade = new DoubleAnimation(0, Anim.Ms(120)) { EasingFunction = Anim.EaseOut };
+            fade.Completed += (_, _) => { if (!_helpOpen) HelpOverlay.Visibility = Visibility.Collapsed; };
+            HelpOverlay.BeginAnimation(UIElement.OpacityProperty, fade);
+        }
     }
 
     // Called by the selection watcher when the user selects fresh text in another
@@ -793,6 +855,7 @@ public partial class PopupWindow : Window
         WireButton(ModelChip, 0.85);
         WireButton(DiffBtn, 1.0);
         WireButton(PopOutBtn, 1.0);
+        WireButton(HelpBtn, 0.85);
     }
 
     // Hover raises opacity; press gives a small scale dip. Additive to the
@@ -808,6 +871,8 @@ public partial class PopupWindow : Window
 
     private void OnPreviewKeyDown(object sender, KeyEventArgs e)
     {
+        // Esc closes the help overlay first if it's open, otherwise the popup.
+        if (e.Key == Key.Escape && _helpOpen) { ToggleHelp(false); e.Handled = true; return; }
         if (e.Key == Key.Escape) { SetAuto(false); SafeClose(); e.Handled = true; return; }
         if ((Keyboard.Modifiers & ModifierKeys.Control) == 0) return;
         switch (e.Key)

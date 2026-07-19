@@ -7,24 +7,53 @@
         WindowStartupLocation="Manual">
   <!-- MouseLeftButtonDown on Root drags the window; clicks inside interactive
        controls (input, transcript, buttons) are filtered out in code. -->
-  <Border x:Name="Root" CornerRadius="12" BorderThickness="1" MouseLeftButtonDown="Root_MouseDown">
+  <Border x:Name="Root" CornerRadius="12" BorderThickness="1" MouseLeftButtonDown="Root_MouseDown"
+          AllowDrop="True" DragEnter="Root_DragEnter" DragOver="Root_DragOver"
+          DragLeave="Root_DragLeave" Drop="Root_Drop">
+    <Grid>
     <DockPanel>
       <!-- title bar -->
       <Grid DockPanel.Dock="Top" Margin="16,12,14,10">
         <Grid.ColumnDefinitions>
           <ColumnDefinition Width="Auto"/>
           <ColumnDefinition Width="Auto"/>
+          <ColumnDefinition Width="Auto"/>
           <ColumnDefinition Width="*"/>
+          <ColumnDefinition Width="Auto"/>
+          <ColumnDefinition Width="Auto"/>
           <ColumnDefinition Width="Auto"/>
           <ColumnDefinition Width="Auto"/>
         </Grid.ColumnDefinitions>
         <TextBlock x:Name="TitleLabel" Text="Agent" FontSize="13" FontWeight="SemiBold"
                    VerticalAlignment="Center"/>
-        <Ellipse x:Name="StatusDot" Grid.Column="1" Width="7" Height="7" Margin="9,1,0,0"
+        <!-- project chip: current project + ▾; click opens the project menu -->
+        <Border x:Name="ProjectChip" Grid.Column="1" CornerRadius="6" BorderThickness="1"
+                Padding="8,2" Margin="10,0,0,0" Cursor="Hand"
+                MouseLeftButtonUp="ProjectChip_Click" ToolTip="Switch project">
+          <StackPanel Orientation="Horizontal">
+            <TextBlock x:Name="ProjectChipText" FontSize="11.5" FontFamily="Consolas"
+                       VerticalAlignment="Center"/>
+            <TextBlock x:Name="ProjectChipCaret" Text="&#xE70D;" FontSize="9"
+                       FontFamily="Segoe Fluent Icons,Segoe MDL2 Assets"
+                       VerticalAlignment="Center" Margin="4,1,0,0"/>
+          </StackPanel>
+        </Border>
+        <Ellipse x:Name="StatusDot" Grid.Column="2" Width="7" Height="7" Margin="9,1,0,0"
                  VerticalAlignment="Center" Visibility="Collapsed"/>
-        <TextBlock x:Name="EngineLabel" Grid.Column="3" FontSize="11" FontFamily="Consolas"
+        <!-- ⊕ start a fresh conversation in this project -->
+        <Border x:Name="NewSessionBtn" Grid.Column="4" CornerRadius="5" BorderThickness="1"
+                Padding="6,2" Margin="0,0,8,0" Cursor="Hand" MouseLeftButtonUp="NewSession_Click"
+                ToolTip="Start a fresh conversation in this project">
+          <TextBlock x:Name="NewSessionGlyph" Text="⊕" FontSize="13" VerticalAlignment="Center"/>
+        </Border>
+        <TextBlock x:Name="EngineLabel" Grid.Column="5" FontSize="11" FontFamily="Consolas"
                    VerticalAlignment="Center" Margin="0,0,10,0"/>
-        <Border x:Name="CloseBtn" Grid.Column="4" CornerRadius="5" BorderThickness="1"
+        <Border x:Name="HelpBtn" Grid.Column="6" CornerRadius="5" BorderThickness="1"
+                Padding="8,3" Margin="0,0,8,0" Cursor="Hand" MouseLeftButtonUp="Help_Click"
+                ToolTip="Shortcuts &amp; tips (?)">
+          <TextBlock x:Name="HelpLabel" Text="?" FontSize="11" FontWeight="SemiBold"/>
+        </Border>
+        <Border x:Name="CloseBtn" Grid.Column="7" CornerRadius="5" BorderThickness="1"
                 Padding="7,3" Cursor="Hand" MouseLeftButtonUp="Close_Click" ToolTip="Close (Esc)">
           <TextBlock x:Name="CloseLabel" Text="✕" FontSize="11"/>
         </Border>
@@ -36,10 +65,17 @@
                 Margin="0,0,0,8" Visibility="Collapsed">
           <TextBlock x:Name="ContextText" FontSize="11" TextTrimming="CharacterEllipsis"/>
         </Border>
+        <!-- pending-attachment tray: removable pills, wraps + scrolls when many -->
+        <ScrollViewer x:Name="AttachTrayScroll" MaxHeight="78" Margin="0,0,0,8"
+                      VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled"
+                      Visibility="Collapsed">
+          <WrapPanel x:Name="AttachTray"/>
+        </ScrollViewer>
         <Border x:Name="InputBar" CornerRadius="10" BorderThickness="1" Padding="10,6">
           <Grid>
             <Grid.ColumnDefinitions>
               <ColumnDefinition Width="*"/>
+              <ColumnDefinition Width="Auto"/>
               <ColumnDefinition Width="Auto"/>
               <ColumnDefinition Width="Auto"/>
             </Grid.ColumnDefinitions>
@@ -49,13 +85,19 @@
                      PreviewKeyDown="Input_KeyDown"/>
             <TextBlock x:Name="InputPlaceholder" Text="ask the agent to do something…" FontSize="13"
                        IsHitTestVisible="False" VerticalAlignment="Center"/>
-            <Border x:Name="MicBtn" Grid.Column="1" CornerRadius="8" BorderThickness="1"
-                    Width="34" Height="34" Margin="8,0,6,0" Cursor="Hand"
+            <Border x:Name="AttachBtn" Grid.Column="1" CornerRadius="8" BorderThickness="1"
+                    Width="34" Height="34" Margin="8,0,0,0" Cursor="Hand"
+                    MouseLeftButtonUp="Attach_Click" ToolTip="Attach files">
+              <TextBlock x:Name="AttachGlyph" Text="&#xE723;" FontFamily="Segoe Fluent Icons,Segoe MDL2 Assets"
+                         FontSize="15" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+            </Border>
+            <Border x:Name="MicBtn" Grid.Column="2" CornerRadius="8" BorderThickness="1"
+                    Width="34" Height="34" Margin="6,0,6,0" Cursor="Hand"
                     MouseLeftButtonUp="Mic_Click" ToolTip="Voice input">
               <TextBlock x:Name="MicGlyph" Text="&#xE720;" FontFamily="Segoe MDL2 Assets"
                          FontSize="15" HorizontalAlignment="Center" VerticalAlignment="Center"/>
             </Border>
-            <Border x:Name="SendBtn" Grid.Column="2" CornerRadius="8"
+            <Border x:Name="SendBtn" Grid.Column="3" CornerRadius="8"
                     Width="34" Height="34" Cursor="Hand" MouseLeftButtonUp="Send_Click"
                     ToolTip="Send  (Enter)">
               <Grid>
@@ -75,5 +117,18 @@
         <StackPanel x:Name="Feed" Margin="10,4,10,8"/>
       </ScrollViewer>
     </DockPanel>
+
+    <!-- help overlay: dim scrim + centered mono cheat-sheet; click-away / Esc / ? closes.
+         Content is built + themed in code. -->
+    <Border x:Name="HelpOverlay" CornerRadius="12" Visibility="Collapsed"
+            MouseLeftButtonDown="HelpOverlay_Click">
+      <Border x:Name="HelpCard" CornerRadius="10" BorderThickness="1"
+              Padding="18,16" MaxWidth="420" MaxHeight="460"
+              HorizontalAlignment="Center" VerticalAlignment="Center"
+              MouseLeftButtonDown="HelpCard_Click">
+        <StackPanel x:Name="HelpContent"/>
+      </Border>
+    </Border>
+    </Grid>
   </Border>
 </Window>

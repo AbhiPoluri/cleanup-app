@@ -47,6 +47,8 @@ dotnet run
 ```
 
 - Tray icon ✦ appears; select text in any app, hit **Ctrl+Shift+E**
+- Tray menu → **Whiteboard** opens the webcam brainstorming view. It uses the provider and model selected under Agent Settings, supports local Parakeet transcription and spoken replies, and exports session transcripts under `Documents\Cleanup\projects\<project>\sessions`.
+- Whiteboard → **phone** shows a QR code for the HTTPS iPhone remote. Keep both devices on the same Wi-Fi, allow Cleanup on private networks if Windows asks, accept Safari's one-time self-signed certificate warning, and allow microphone access for hold-to-talk. The phone shows `Heard:` when transcription completes and speaks completed agent replies unless muted.
 - Tray menu → Test Popup opens the popup with sample text (no selection needed)
 - Settings live at `%APPDATA%\Cleanup\settings.json`
 - To make a standalone exe: `dotnet publish -c Release -r win-x64 --self-contained`

@@ -10,6 +10,10 @@ namespace Cleanup;
 
 public partial class SettingsWindow : Window
 {
+    // Mono theme (light/dark by OS pref) — the whole Settings window is themed to match
+    // the rest of the app, migrated off the old SystemColors light chrome.
+    private readonly Theme _t = Theme.Detect();
+
     private uint _hkMods = Settings.Current.HotkeyModifiers;
     private uint _hkKey = Settings.Current.HotkeyKey;
     private string _hkDisplay = Settings.Current.HotkeyDisplay;
@@ -17,10 +21,27 @@ public partial class SettingsWindow : Window
     private uint _hk2Key = Settings.Current.HotkeyKey2;
     private string _hk2Display = Settings.Current.HotkeyDisplay2;
 
+    // Polls the cheap health rows (hotkey / token) every ~2s while the window is open, so
+    // they stay live without re-running the CLI probes (those keep the 10s cache).
+    private System.Windows.Threading.DispatcherTimer? _healthPoll;
+
     public SettingsWindow()
     {
         InitializeComponent();
         var s = Settings.Current;
+
+        ApplyTheme();
+        // restore the last size, clamped to the mins
+        Width = Math.Max(640, s.SettingsWidth);
+        Height = Math.Max(480, s.SettingsHeight);
+        ShowSection("health");                 // Health lands first
+        SourceInitialized += (_, _) => TryDarkTitleBar();
+        Closing += (_, _) =>
+        {
+            Settings.Current.SettingsWidth = ActualWidth;
+            Settings.Current.SettingsHeight = ActualHeight;
+            Settings.Current.Save();
+        };
 
         SelectByTag(BackendBox, s.Backend);
         OllamaUrlBox.Text = s.OllamaUrl;
@@ -43,6 +64,7 @@ public partial class SettingsWindow : Window
         ChipStarCheck.IsChecked = s.ChipStar;
         ChipBoltCheck.IsChecked = s.ChipBolt;
         ChipAgentCheck.IsChecked = s.ChipAgent;
+        ChipSnipCheck.IsChecked = s.ChipSnip;
         ChipTogglesPanel.IsEnabled = s.FloatingButton;   // grey the per-chip toggles when the master is off
         AutoCloseCheck.IsChecked = s.AutoClose;
         ButtonSizeSlider.Value = Math.Clamp(s.FloatingButtonSize, 22, 48);
@@ -50,7 +72,7 @@ public partial class SettingsWindow : Window
         HotkeyBox.Text = _hkDisplay;
         HotkeyBox2.Text = _hk2Display;
         TriggerHint.Text = $"Trigger: select text, then {_hkDisplay} for the popup or {_hk2Display} " +
-                           "to instantly rewrite in place — or click the ✦ / ⚡ buttons.";
+                           "to instantly rewrite in place — or click the floating ✦ / instant buttons.";
         CodexStatusLabel.Text = Llm.CodexStatus();
         VersionLabel.Text = Updater.IsDevBuild ? "dev build — update check only" : Updater.DisplayVersion;
 
@@ -62,6 +84,9 @@ public partial class SettingsWindow : Window
         SelectByTag(AgentEngineBox, _agentEngineSel);
         SelectByTag(AgentPermBox, s.AgentPermission);
         if (AgentPermBox.SelectedIndex < 0) AgentPermBox.SelectedIndex = 0;
+        AgentContextBox.Text = s.AgentContext;
+        SelectByTag(VoiceASRBox, s.VoiceASR);
+        SelectByTag(VoiceTTSBox, s.VoiceTTS);
         RepopulateAgentModels();       // fill the model box for the selected engine
         UpdateAgentWarn();
         _agentLoading = false;
@@ -70,7 +95,107 @@ public partial class SettingsWindow : Window
         _ = LoadOllamaModels();
         _ = LoadClaudeStatus();
         _ = RefreshAgentStatus();
+        _ = RefreshVoiceStatus();
+        _ = LoadHealth();
+
+        _healthPoll = new System.Windows.Threading.DispatcherTimer { Interval = TimeSpan.FromSeconds(2) };
+        _healthPoll.Tick += (_, _) =>
+        {
+            if (HealthPanel == null) return;
+            var rows = Health.RefreshCheapRows();
+            if (rows != null)
+                HealthView.Render(HealthPanel, rows,
+                    titleBrush: _t.Text, mutedBrush: _t.Muted,
+                    fixBrush: _t.Text, fixBorderBrush: _t.LineStrong);
+        };
+        _healthPoll.Start();
+        Closed += (_, _) => _healthPoll?.Stop();
     }
+
+    // ---- Health checklist ----
+    // Rendered with the Mono theme brushes so it reads on the dark Settings surface
+    // (migrated off the old SystemColors light-chrome brushes).
+    private async System.Threading.Tasks.Task LoadHealth(bool force = false)
+    {
+        if (HealthPanel == null) return;
+        HealthRefreshBtn.IsEnabled = false;
+        try
+        {
+            var rows = await Health.GetRowsAsync(force);
+            HealthView.Render(HealthPanel, rows,
+                titleBrush: _t.Text, mutedBrush: _t.Muted,
+                fixBrush: _t.Text, fixBorderBrush: _t.LineStrong);
+        }
+        catch { /* health is best-effort — never block the settings window */ }
+        finally { if (HealthRefreshBtn != null) HealthRefreshBtn.IsEnabled = true; }
+    }
+
+    private async void HealthRefresh_Click(object sender, RoutedEventArgs e) => await LoadHealth(true);
+
+    // ---- theme + navigation ----
+
+    // Inject the Mono palette into window Resources (the XAML styles bind to these keys via
+    // DynamicResource), then paint the structural chrome that isn't style-driven.
+    private void ApplyTheme()
+    {
+        void Put(string k, System.Windows.Media.Brush b) => Resources[k] = b;
+        Put("Surface", _t.Surface); Put("Surface2", _t.Surface2); Put("Surface3", _t.Surface3);
+        Put("Line", _t.Line); Put("LineStrong", _t.LineStrong);
+        Put("Text", _t.Text); Put("Muted", _t.Muted); Put("Faint", _t.Faint);
+        Put("Accent", _t.Accent); Put("OnAccent", _t.OnAccent);
+
+        Background = _t.Surface;
+        Root.Background = _t.Surface;
+        Sidebar.Background = _t.Surface2;
+        Sidebar.BorderBrush = _t.Line;
+        Footer.Background = _t.Surface;
+        Footer.BorderBrush = _t.Line;
+        SaveBtn.Background = _t.Accent;
+        SaveBtn.Foreground = _t.OnAccent;
+        SaveBtn.BorderBrush = _t.Accent;
+    }
+
+    private readonly string[] _sections = { "health", "rewrite", "triggers", "agent", "about" };
+
+    private void Nav_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is System.Windows.Controls.Button b && b.Tag is string tag) ShowSection(tag);
+    }
+
+    // Swap the visible section ScrollViewer + reflect the selection in the sidebar.
+    private void ShowSection(string tag)
+    {
+        HealthScroll.Visibility   = tag == "health"   ? Visibility.Visible : Visibility.Collapsed;
+        RewriteScroll.Visibility  = tag == "rewrite"  ? Visibility.Visible : Visibility.Collapsed;
+        TriggersScroll.Visibility = tag == "triggers" ? Visibility.Visible : Visibility.Collapsed;
+        AgentScroll.Visibility    = tag == "agent"    ? Visibility.Visible : Visibility.Collapsed;
+        AboutScroll.Visibility    = tag == "about"    ? Visibility.Visible : Visibility.Collapsed;
+
+        foreach (var nav in new[] { NavHealth, NavRewrite, NavTriggers, NavAgent, NavAbout })
+        {
+            var selected = (nav.Tag as string) == tag;
+            nav.Background = selected ? _t.Surface3 : System.Windows.Media.Brushes.Transparent;
+            nav.Foreground = selected ? _t.Text : _t.Muted;
+        }
+    }
+
+    // Best-effort dark title bar (DWM immersive dark mode) when the OS theme is dark.
+    private void TryDarkTitleBar()
+    {
+        if (_t != Theme.Dark) return;
+        try
+        {
+            var hwnd = new System.Windows.Interop.WindowInteropHelper(this).Handle;
+            int on = 1;
+            // DWMWA_USE_IMMERSIVE_DARK_MODE = 20 (19 on older Win10 builds)
+            if (DwmSetWindowAttribute(hwnd, 20, ref on, sizeof(int)) != 0)
+                DwmSetWindowAttribute(hwnd, 19, ref on, sizeof(int));
+        }
+        catch { /* purely cosmetic — never fail the window over the title bar */ }
+    }
+
+    [System.Runtime.InteropServices.DllImport("dwmapi.dll")]
+    private static extern int DwmSetWindowAttribute(IntPtr hwnd, int attr, ref int value, int size);
 
     // ---- Agent mode ----
     // Per-engine model kept locally so switching engines in the UI never carries a
@@ -148,6 +273,110 @@ public partial class SettingsWindow : Window
     {
         try { ClaudeStatusLabel.Text = await Llm.ClaudeStatus(); }
         catch { ClaudeStatusLabel.Text = "Could not check the Claude Code CLI"; }
+    }
+
+    // ---- local voice engines (Parakeet ASR + Kokoro TTS) ----
+
+    private string SelectedVoiceASR =>
+        (string)((ComboBoxItem?)VoiceASRBox.SelectedItem)?.Tag! ?? "system";
+    private string SelectedVoiceTTS =>
+        (string)((ComboBoxItem?)VoiceTTSBox.SelectedItem)?.Tag! ?? "system";
+
+    private System.Threading.CancellationTokenSource? _voiceInstallCts;
+
+    // Reflect install/helper state into the status box + the button label. Pings the helper
+    // when installed (spawns it once — reused by the mic afterwards).
+    private async System.Threading.Tasks.Task RefreshVoiceStatus()
+    {
+        if (VoiceStatusLabel == null) return;
+        if (_voiceInstallCts != null) return;   // an install is driving the label right now
+        try
+        {
+            if (!VoiceEngine.IsInstalled)
+            {
+                VoiceInstallBtn.Content = "Install local voice engines";
+                VoiceInstallBtn.IsEnabled = true;
+                VoiceStatusLabel.Text = VoiceEngine.SystemPythonAvailable()
+                    ? "Not installed. Downloads Parakeet (ASR) + Kokoro (TTS) into a managed Python environment."
+                    : "Python 3.10+ not found. Install it from python.org, then click Install.";
+                return;
+            }
+            VoiceStatusLabel.Text = "Installed — checking the helper…";
+            var ping = await VoiceEngine.Ping();
+            VoiceInstallBtn.Content = "Reinstall";
+            VoiceInstallBtn.IsEnabled = true;
+            if (ping == null)
+            {
+                VoiceStatusLabel.Text = "Installed, but the helper isn't responding — click Reinstall.";
+                return;
+            }
+            var model = VoiceEngine.ParakeetModelPresent()
+                ? "Parakeet model ready" : "Parakeet model downloads on first mic use";
+            VoiceStatusLabel.Text =
+                $"Ready — helper responds (ASR {(ping.Value.Asr ? "✓" : "✗")}, TTS {(ping.Value.Tts ? "✓" : "✗")}). {model}.";
+        }
+        catch { VoiceStatusLabel.Text = "Could not check the local voice engines."; }
+    }
+
+    // "Test voice" — audition the selected speech-output engine right from Settings.
+    private bool _voiceTesting;
+    private async void VoiceTest_Click(object sender, RoutedEventArgs e)
+    {
+        if (_voiceTesting) return;
+        const string sample = "Hi — this is how I'll sound at the whiteboard.";
+        var tts = (VoiceTTSBox.SelectedItem as ComboBoxItem)?.Tag as string ?? "system";
+        void Say(string m) { if (VoiceTestStatus != null) VoiceTestStatus.Text = m; }
+
+        if (tts != "kokoro")
+        {
+            try { using var synth = new System.Speech.Synthesis.SpeechSynthesizer(); synth.SpeakAsync(sample); Say("That's the system voice."); }
+            catch { Say("System voice is unavailable."); }
+            return;
+        }
+        if (!VoiceEngine.IsInstalled) { Say("Not installed — use \"Install local voice engines\" first."); return; }
+
+        _voiceTesting = true;
+        VoiceTestBtn.IsEnabled = false;
+        Say("Synthesizing… (first use downloads the model)");
+        try
+        {
+            var outPath = System.IO.Path.Combine(System.IO.Path.GetTempPath(), $"cleanup-tts-{Guid.NewGuid():N}.wav");
+            var ok = await VoiceEngine.Synthesize(sample, outPath);
+            if (ok != null && System.IO.File.Exists(outPath))
+            {
+                Say("Playing…");
+                using var player = new System.Media.SoundPlayer(outPath);
+                await System.Threading.Tasks.Task.Run(() => player.PlaySync());
+                try { System.IO.File.Delete(outPath); } catch { }
+                Say("That's the Kokoro voice.");
+            }
+            else Say("Couldn't synthesize — see the log (tray → Open Log).");
+        }
+        catch (Exception ex) { Say("Test failed — " + ex.Message); }
+        finally { _voiceTesting = false; VoiceTestBtn.IsEnabled = true; }
+    }
+
+    private async void VoiceInstall_Click(object sender, RoutedEventArgs e)
+    {
+        if (_voiceInstallCts != null) return;   // already installing
+        var cts = new System.Threading.CancellationTokenSource();
+        _voiceInstallCts = cts;
+        VoiceInstallBtn.IsEnabled = false;
+        // progress arrives on the UI thread (Install is awaited here without ConfigureAwait),
+        // but marshal defensively so a background continuation can't touch the label off-thread.
+        void Report(string msg) => Dispatcher.Invoke(() => { if (VoiceStatusLabel != null) VoiceStatusLabel.Text = msg; });
+        try
+        {
+            await VoiceEngine.Install(Report, cts.Token);
+        }
+        catch { Report("Install failed — see the log (tray → Open Log)."); }
+        finally
+        {
+            if (ReferenceEquals(_voiceInstallCts, cts)) _voiceInstallCts = null;
+            VoiceInstallBtn.IsEnabled = true;
+            await RefreshVoiceStatus();
+            _ = LoadHealth(true);   // refresh the Local voice health row too
+        }
     }
 
     private UpdateInfo? _pendingUpdate;
@@ -331,10 +560,14 @@ public partial class SettingsWindow : Window
         s.AgentClaudeModel = _agentClaudeModel;
         s.AgentCodexModel = _agentCodexModel;
         s.AgentPermission = SelectedAgentPerm;
+        s.AgentContext = AgentContextBox.Text;
+        s.VoiceASR = SelectedVoiceASR;
+        s.VoiceTTS = SelectedVoiceTTS;
         s.FloatingButton = FloatingButtonCheck.IsChecked == true;
         s.ChipStar = ChipStarCheck.IsChecked == true;
         s.ChipBolt = ChipBoltCheck.IsChecked == true;
         s.ChipAgent = ChipAgentCheck.IsChecked == true;
+        s.ChipSnip = ChipSnipCheck.IsChecked == true;
         s.AutoClose = AutoCloseCheck.IsChecked == true;
         s.FloatingButtonSize = Math.Round(ButtonSizeSlider.Value);
         s.FontSize = Math.Round(FontSizeSlider.Value);
@@ -351,6 +584,8 @@ public partial class SettingsWindow : Window
             s.HotkeyDisplay2 = _hk2Display;
         }
         s.Save();
+        // personal context is global — regenerate EVERY project's CLAUDE.md / AGENTS.md
+        ProjectStore.RegenerateAll();
         AppController.Current?.RefreshHotkey();
         Close();
     }
