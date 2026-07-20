@@ -100,18 +100,32 @@ internal static class VoiceEngine
 
             using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
             timeoutCts.CancelAfter(timeoutMs);
-            var readTask = _stdout!.ReadLineAsync();
-            var completed = await Task.WhenAny(readTask, Task.Delay(Timeout.Infinite, timeoutCts.Token));
-            if (completed != readTask)
+            while (true)
             {
-                // timed out or cancelled — the helper may be mid-download or wedged; drop it
-                KillProc();
-                return null;
+                var readTask = _stdout!.ReadLineAsync();
+                var completed = await Task.WhenAny(readTask, Task.Delay(Timeout.Infinite, timeoutCts.Token));
+                if (completed != readTask)
+                {
+                    // timed out or cancelled — the helper may be mid-download or wedged; drop it
+                    KillProc();
+                    return null;
+                }
+                var reply = await readTask;
+                if (reply == null) { KillProc(); return null; }
+                try
+                {
+                    var parsed = JsonDocument.Parse(reply);
+                    timeoutCts.Cancel();
+                    return parsed;
+                }
+                catch (JsonException)
+                {
+                    // Some ML libraries print model-download notices to stdout. New helpers
+                    // redirect those, but tolerate an older installed helper until it restarts.
+                    Log.Write("voice: ignored non-protocol helper output — " +
+                        (reply.Length > 160 ? reply[..160] + "…" : reply));
+                }
             }
-            timeoutCts.Cancel();   // read won → stop the timeout timer promptly
-            var reply = await readTask;
-            if (reply == null) { KillProc(); return null; }
-            return JsonDocument.Parse(reply);
         }
         catch (Exception ex)
         {
@@ -139,8 +153,9 @@ internal static class VoiceEngine
     // the generous timeout); later calls are quick. Returns null on any failure.
     public static async Task<string?> Transcribe(string wavPath, CancellationToken ct = default)
     {
-        // 5 min: the very first transcription pulls the ~2GB model over the network
-        using var doc = await Request(new { op = "asr", path = wavPath }, 300000, ct);
+        // First use may pull the ~2GB model over a slower connection. The phone remote
+        // reports live elapsed time while this request is running.
+        using var doc = await Request(new { op = "asr", path = wavPath }, 900000, ct);
         if (doc == null) return null;
         var root = doc.RootElement;
         if (root.TryGetProperty("ok", out var ok) && ok.ValueKind == JsonValueKind.True &&
@@ -178,6 +193,9 @@ internal static class VoiceEngine
         KillProc();
         try
         {
+            // Refresh helper.py on every process start so app updates repair the protocol
+            // without forcing users to reinstall the large Python environment.
+            WriteHelper();
             var psi = new ProcessStartInfo
             {
                 FileName = VenvPython,
@@ -426,6 +444,7 @@ import os
 import json
 import wave
 import urllib.request
+import contextlib
 
 VOICE_DIR = os.path.dirname(os.path.abspath(__file__))
 MODELS_DIR = os.path.join(VOICE_DIR, ""models"")
@@ -535,6 +554,7 @@ def handle(req):
 
 
 def main():
+    protocol_out = sys.stdout
     for line in sys.stdin:
         line = line.strip()
         if not line:
@@ -546,11 +566,14 @@ def main():
             sys.stdout.flush()
             continue
         try:
-            resp = handle(req)
+            # Third-party model loaders sometimes print progress to stdout. stdout is our
+            # JSON-lines protocol, so route library chatter to stderr for the whole request.
+            with contextlib.redirect_stdout(sys.stderr):
+                resp = handle(req)
         except Exception as e:
             resp = {""ok"": False, ""error"": str(e)}
-        sys.stdout.write(json.dumps(resp) + ""\n"")
-        sys.stdout.flush()
+        protocol_out.write(json.dumps(resp) + ""\n"")
+        protocol_out.flush()
 
 
 if __name__ == ""__main__"":

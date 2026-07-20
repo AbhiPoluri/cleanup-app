@@ -25,6 +25,11 @@ internal enum AgentEngineKind { Codex, Claude }
 internal sealed class AgentEngine
 {
     private readonly AgentEngineKind _kind;
+    private readonly bool _isolatedSession;
+    private readonly string? _isolatedWorkingDirectory;
+    private string? _isolatedCodexSessionId;
+    private bool _isolatedClaudeHasSession;
+    private string? _capturedCodexSessionId;
     // The project supplying the cwd + per-project resume state for the CURRENT turn.
     // Set at the top of Run; switching projects in the window just passes a different one.
     private Project? _project;
@@ -42,7 +47,13 @@ internal sealed class AgentEngine
 
     public AgentEngineKind Kind => _kind;
 
-    public AgentEngine(AgentEngineKind kind) { _kind = kind; }
+    public AgentEngine(AgentEngineKind kind, bool isolatedSession = false)
+    {
+        _kind = kind;
+        _isolatedSession = isolatedSession;
+        if (isolatedSession)
+            _isolatedWorkingDirectory = Path.Combine(Path.GetTempPath(), "Cleanup", "agent-sessions", Guid.NewGuid().ToString("N"));
+    }
 
     // The engine the user has selected in Agent settings (independent of Backend).
     public static AgentEngineKind SelectedKind() =>
@@ -78,7 +89,7 @@ internal sealed class AgentEngine
         _onText = onText;
         _onEvent = onEvent;
         _seg.Clear(); _segStreamed = false; _lastEmit = -1; _dirty = false;
-        _sawAssistantText = false; _reportedError = null;
+        _sawAssistantText = false; _reportedError = null; _capturedCodexSessionId = null;
 
         var cli = ResolveCli() ?? throw new Exception(_kind == AgentEngineKind.Codex
             ? "Codex CLI not found — npm i -g @openai/codex, then run `codex login`"
@@ -86,9 +97,24 @@ internal sealed class AgentEngine
 
         // Resume is per project AND per provider. Claude's --continue is cwd-scoped while
         // Codex needs the exact captured id; neither may infer state from the other engine.
+        var codexSessionId = _isolatedSession ? _isolatedCodexSessionId : project.CodexSessionId;
         bool resume = _kind == AgentEngineKind.Codex
-            ? !string.IsNullOrEmpty(project.CodexSessionId)
-            : project.ClaudeHasSession;
+            ? !string.IsNullOrEmpty(codexSessionId)
+            : (_isolatedSession ? _isolatedClaudeHasSession : project.ClaudeHasSession);
+        var workingDirectory = _isolatedSession ? _isolatedWorkingDirectory! : ProjectStore.EnsureDir(project);
+        Directory.CreateDirectory(workingDirectory);
+        if (_isolatedSession)
+        {
+            // Preserve the selected project's brief and personal context without sharing
+            // its persisted CLI conversation. Both providers discover these files in cwd.
+            var projectDirectory = ProjectStore.EnsureDir(project);
+            foreach (var name in new[] { "AGENTS.md", "CLAUDE.md" })
+            {
+                var source = Path.Combine(projectDirectory, name);
+                try { if (File.Exists(source)) File.Copy(source, Path.Combine(workingDirectory, name), overwrite: true); }
+                catch (Exception ex) { Log.Write($"agent: could not copy {name} into isolated session — {ex.Message}"); }
+            }
+        }
         var psi = new ProcessStartInfo
         {
             UseShellExecute = false,
@@ -98,15 +124,16 @@ internal sealed class AgentEngine
             CreateNoWindow = true,
             StandardOutputEncoding = Encoding.UTF8,
             StandardErrorEncoding = Encoding.UTF8,
+            StandardInputEncoding = new UTF8Encoding(false),
             // Per-project app-owned workdir (Documents\Cleanup\projects\<slug>), NOT the user
             // profile: $HOME made Claude auto-load the user's personal ~/CLAUDE.md + global
             // memory into every run. This dir carries the project's own CLAUDE.md / AGENTS.md
             // and its own Claude per-cwd auto-memory.
-            WorkingDirectory = ProjectStore.EnsureDir(project),
+            WorkingDirectory = workingDirectory,
         };
         Llm.SetCliTarget(psi, cli);
         var permission = permissionOverride ?? Settings.Current.AgentPermission;
-        BuildArgs(psi, images, attachDirs, resume, permission);
+        BuildArgs(psi, images, attachDirs, resume, permission, codexSessionId);
         var taskHash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(task)))[..12].ToLowerInvariant();
         Log.Write($"agent: project={project.Slug} resume={(resume ? (_kind == AgentEngineKind.Codex ? "resume-id" : "continue") : "fresh")} engine={_kind} perm={permission} prompt=stdin len={task.Length} sha={taskHash}");
 
@@ -124,9 +151,21 @@ internal sealed class AgentEngine
         {
             // Both CLIs support text prompts on stdin. This avoids Windows' ~32K process
             // command-line limit and guarantees newlines/quotes arrive byte-for-byte.
-            await proc.StandardInput.WriteAsync(task.AsMemory(), ct);
-            await proc.StandardInput.FlushAsync(ct);
-            proc.StandardInput.Close();
+            Exception? promptWriteError = null;
+            try
+            {
+                await proc.StandardInput.WriteAsync(task.AsMemory(), ct);
+                await proc.StandardInput.FlushAsync(ct);
+            }
+            catch (Exception ex) when (ex is IOException or InvalidOperationException or ObjectDisposedException)
+            {
+                // The CLI can exit before consuming stdin (bad option, stale session, auth
+                // failure). Keep draining stdout/stderr so the useful CLI error is surfaced
+                // instead of masking it with Windows' generic "pipe has been ended" message.
+                promptWriteError = ex;
+                Log.Write($"agent: stdin delivery interrupted engine={_kind} err={ex.Message}");
+            }
+            finally { try { proc.StandardInput.Close(); } catch { } }
             string? line;
             while ((line = await proc.StandardOutput.ReadLineAsync(ct)) != null)
             {
@@ -146,40 +185,50 @@ internal sealed class AgentEngine
             }
             FlushText();
             await proc.WaitForExitAsync(ct);
+            string stderr = "";
+            try { stderr = (await stderrTask ?? "").Trim(); } catch { }
             if (proc.ExitCode != 0)
             {
-                string tail = "";
-                try { tail = (await stderrTask ?? "").Trim(); } catch { }
-                if (_kind == AgentEngineKind.Claude && resume && MissingClaudeSession(tail))
+                if (_kind == AgentEngineKind.Claude && resume && MissingClaudeSession(stderr))
                 {
-                    project.ClaudeHasSession = false;
-                    project.HasSession = !string.IsNullOrEmpty(project.CodexSessionId);
-                    ProjectStore.Save(project);
+                    ClearClaudeSession(project);
                     Event("▸ previous Claude session unavailable — retrying fresh");
                     await Run(project, task, images, attachDirs, onText, onEvent, ct, permissionOverride);
                     return;
                 }
-                if (tail.Length > 300) tail = "…" + tail[^300..];
-                throw new Exception(tail.Length > 0 ? tail : $"exit {proc.ExitCode}");
+                if (_kind == AgentEngineKind.Codex && resume && MissingCodexSession(stderr))
+                {
+                    ClearCodexSession(project);
+                    Event("▸ previous Codex session unavailable — retrying fresh");
+                    await Run(project, task, images, attachDirs, onText, onEvent, ct, permissionOverride);
+                    return;
+                }
+                if (stderr.Length > 500) stderr = "…" + stderr[^500..];
+                throw new Exception(stderr.Length > 0 ? stderr : $"exit {proc.ExitCode}");
             }
             if (!string.IsNullOrWhiteSpace(_reportedError))
             {
                 if (_kind == AgentEngineKind.Claude && resume && MissingClaudeSession(_reportedError))
                 {
-                    project.ClaudeHasSession = false;
-                    project.HasSession = !string.IsNullOrEmpty(project.CodexSessionId);
-                    ProjectStore.Save(project);
+                    ClearClaudeSession(project);
                     Event("▸ previous Claude session unavailable — retrying fresh");
+                    await Run(project, task, images, attachDirs, onText, onEvent, ct, permissionOverride);
+                    return;
+                }
+                if (_kind == AgentEngineKind.Codex && resume && MissingCodexSession(_reportedError))
+                {
+                    ClearCodexSession(project);
+                    Event("▸ previous Codex session unavailable — retrying fresh");
                     await Run(project, task, images, attachDirs, onText, onEvent, ct, permissionOverride);
                     return;
                 }
                 throw new Exception(_reportedError);
             }
+            if (promptWriteError != null)
+                throw new Exception($"{_kind} could not receive the prompt through stdin — {promptWriteError.Message}");
             if (!_sawAssistantText)
                 throw new Exception("The agent completed without returning a response. Check Health and the Cleanup log for the CLI output.");
-            project.HasSession = true;
-            if (_kind == AgentEngineKind.Claude) project.ClaudeHasSession = true;
-            ProjectStore.Save(project);
+            CommitSession(project);
             Log.Write($"agent turn done engine={_kind}");
         }
         finally
@@ -191,7 +240,8 @@ internal sealed class AgentEngine
 
     // ---------- argument construction (per engine, per permission tier) ----------
 
-    private void BuildArgs(ProcessStartInfo psi, IReadOnlyList<string> images, IReadOnlyList<string> attachDirs, bool resume, string permission)
+    private void BuildArgs(ProcessStartInfo psi, IReadOnlyList<string> images, IReadOnlyList<string> attachDirs,
+        bool resume, string permission, string? codexSessionId)
     {
         var s = Settings.Current;
         void A(string a) => psi.ArgumentList.Add(a);
@@ -205,7 +255,7 @@ internal sealed class AgentEngine
             if (resume)
             {
                 A("resume");
-                A(_project!.CodexSessionId!);
+                A(codexSessionId!);
             }
             A("--json");
             // `codex exec resume` REJECTS -s (its options differ from plain exec) — the
@@ -429,7 +479,8 @@ internal sealed class AgentEngine
     // can `codex exec resume <id>`. Shapes vary across versions, so we probe defensively.
     private void CaptureCodexSession(JsonElement root, JsonElement ev)
     {
-        if (_project == null || !string.IsNullOrEmpty(_project.CodexSessionId)) return;
+        if (_project == null || !string.IsNullOrEmpty(_capturedCodexSessionId) ||
+            !string.IsNullOrEmpty(_isolatedSession ? _isolatedCodexSessionId : _project.CodexSessionId)) return;
         string? id = FindSessionId(ev) ?? FindSessionId(root);
         if (id == null)
         {
@@ -443,9 +494,44 @@ internal sealed class AgentEngine
                     }
         }
         if (string.IsNullOrEmpty(id)) return;
-        _project.CodexSessionId = id;
-        try { ProjectStore.Save(_project); } catch { }
+        // Do not persist a fresh id until the first turn succeeds. A CLI that dies after
+        // thread.started otherwise leaves a poisoned resume id for the next launch.
+        _capturedCodexSessionId = id;
         Log.Write($"codex resume id={id}");
+    }
+
+    private void CommitSession(Project project)
+    {
+        if (_isolatedSession)
+        {
+            if (_kind == AgentEngineKind.Codex && !string.IsNullOrEmpty(_capturedCodexSessionId))
+                _isolatedCodexSessionId = _capturedCodexSessionId;
+            if (_kind == AgentEngineKind.Claude) _isolatedClaudeHasSession = true;
+            return;
+        }
+
+        project.HasSession = true;
+        if (_kind == AgentEngineKind.Codex && !string.IsNullOrEmpty(_capturedCodexSessionId))
+            project.CodexSessionId = _capturedCodexSessionId;
+        if (_kind == AgentEngineKind.Claude) project.ClaudeHasSession = true;
+        ProjectStore.Save(project);
+    }
+
+    private void ClearClaudeSession(Project project)
+    {
+        if (_isolatedSession) { _isolatedClaudeHasSession = false; return; }
+        project.ClaudeHasSession = false;
+        project.HasSession = !string.IsNullOrEmpty(project.CodexSessionId);
+        ProjectStore.Save(project);
+    }
+
+    private void ClearCodexSession(Project project)
+    {
+        _capturedCodexSessionId = null;
+        if (_isolatedSession) { _isolatedCodexSessionId = null; return; }
+        project.CodexSessionId = null;
+        project.HasSession = project.ClaudeHasSession;
+        ProjectStore.Save(project);
     }
 
     private static string? FindSessionId(JsonElement e) =>
@@ -506,5 +592,13 @@ internal sealed class AgentEngine
         var s = stderr.ToLowerInvariant();
         return s.Contains("no conversation") || s.Contains("no session") ||
                s.Contains("session not found") || s.Contains("conversation not found");
+    }
+
+    private static bool MissingCodexSession(string stderr)
+    {
+        var s = stderr.ToLowerInvariant();
+        return s.Contains("session not found") || s.Contains("thread not found") ||
+               s.Contains("rollout not found") || s.Contains("unknown session") ||
+               s.Contains("invalid session") || s.Contains("failed to resume");
     }
 }

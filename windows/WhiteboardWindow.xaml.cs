@@ -30,7 +30,9 @@ public partial class WhiteboardWindow : Window
     }
 
     private readonly Theme _t = Theme.Detect();
-    private AgentEngine _engine = new(AgentEngine.SelectedKind());
+    // Whiteboard context is deliberately isolated from the normal project Agent window.
+    // Each Whiteboard window starts fresh, then resumes only its own turns while it stays open.
+    private AgentEngine _engine = new(AgentEngine.SelectedKind(), isolatedSession: true);
     private readonly WhiteboardCamera _camera = new();
     private readonly WhiteboardVoice _voice = new();
     private readonly WhiteboardSpeaker _speaker = new();
@@ -155,8 +157,9 @@ public partial class WhiteboardWindow : Window
         text = text.Trim();
         if (text.Length == 0 || _busy) return;
         InputBox.Clear();
-        var attachBoard = text.Contains("look", StringComparison.OrdinalIgnoreCase) || text.Contains("board", StringComparison.OrdinalIgnoreCase);
-        var image = attachBoard ? _camera.Snapshot(Settings.Current.WhiteboardCorners) : null;
+        // Every whiteboard turn receives a frame captured for that exact message. Requiring
+        // magic words such as "look" made ordinary phone voice prompts image-blind.
+        var image = _camera.Snapshot(Settings.Current.WhiteboardCorners);
         RunTurn(text, image);
     }
 
@@ -165,7 +168,7 @@ public partial class WhiteboardWindow : Window
     private void RefreshEngine()
     {
         var selected = AgentEngine.SelectedKind();
-        if (_engine.Kind != selected) _engine = new AgentEngine(selected);
+        if (_engine.Kind != selected) _engine = new AgentEngine(selected, isolatedSession: true);
         EngineLabel.Text = _engine.Label.Replace(Settings.Current.AgentPermission, "safe");
     }
 
@@ -188,8 +191,11 @@ public partial class WhiteboardWindow : Window
         SetStatus("thinking…");
         _liveAssistant = null;
         var cts = new CancellationTokenSource(); _runCts = cts;
+        var frameContext = image == null
+            ? "No current camera frame is available for this turn. Do not infer visual details from older images; say that the current board could not be captured."
+            : "The attached image was captured from the whiteboard for this exact turn. Treat it as the only current board frame and do not describe any older image from conversation history.";
         var task = "You are a live whiteboard brainstorming partner. Be conversational, concrete, and concise. " +
-                   "Respond in 2–4 spoken-friendly sentences unless the user asks for detail. Treat attached images as the current board.\n\nUser: " + text;
+                   "Respond in 2–4 spoken-friendly sentences unless the user asks for detail. " + frameContext + "\n\nUser: " + text;
         try
         {
             var images = image == null ? Array.Empty<string>() : new[] { image };

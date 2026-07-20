@@ -165,21 +165,71 @@ internal sealed class WhiteboardRemote : IAsyncDisposable
         var ext = c.Request.ContentType?.Contains("webm", StringComparison.OrdinalIgnoreCase) == true ? ".webm" : ".m4a";
         var source = Path.Combine(dir, "phone-" + Guid.NewGuid().ToString("N") + ext);
         var wav = source + ".wav";
+        var started = System.Diagnostics.Stopwatch.StartNew();
+        using var progressTimer = new Timer(_ =>
+        {
+            var elapsed = started.Elapsed;
+            Push(new { type = "voice_progress", seconds = (int)elapsed.TotalSeconds,
+                text = elapsed.TotalSeconds < 8 ? "transcribing" : "transcribing · first use may be downloading the local model" });
+        }, null, TimeSpan.Zero, TimeSpan.FromSeconds(2));
         try
         {
             if (c.Request.ContentLength > 3_000_000) { c.Response.StatusCode = 413; return; }
-            await using (var fs = File.Create(source)) await c.Request.Body.CopyToAsync(fs, c.RequestAborted);
+            await using (var fs = File.Create(source))
+                await CopyWithLimit(c.Request.Body, fs, 3_000_000, c.RequestAborted);
+            Push(new { type = "voice_progress", seconds = (int)started.Elapsed.TotalSeconds, text = "preparing recording" });
             await Task.Run(() => ConvertToWav(source, wav), c.RequestAborted);
             string? text;
-            if (Settings.Current.VoiceASR == "parakeet" && VoiceEngine.IsInstalled) text = await VoiceEngine.Transcribe(wav, c.RequestAborted);
-            else text = await SystemTranscribe(wav);
+            if (Settings.Current.VoiceASR == "parakeet" && VoiceEngine.IsInstalled)
+            {
+                Push(new { type = "voice_progress", seconds = (int)started.Elapsed.TotalSeconds, text = "transcribing with Parakeet" });
+                text = await VoiceEngine.Transcribe(wav, c.RequestAborted);
+            }
+            else
+            {
+                Push(new { type = "voice_progress", seconds = (int)started.Elapsed.TotalSeconds, text = "transcribing with Windows speech" });
+                text = await SystemTranscribe(wav, c.RequestAborted);
+            }
             text = text?.Trim();
-            if (string.IsNullOrEmpty(text)) { await c.Response.WriteAsJsonAsync(new { ok = false, reason = "empty" }); return; }
-            OnSay?.Invoke(text);
+            if (string.IsNullOrEmpty(text))
+            {
+                Log.Write($"whiteboard remote voice: empty result engine={Settings.Current.VoiceASR} elapsed={started.ElapsedMilliseconds}ms");
+                await c.Response.WriteAsJsonAsync(new { ok = false, reason = "No speech was recognized. Try again closer to the microphone." });
+                return;
+            }
             await c.Response.WriteAsJsonAsync(new { ok = true, text });
+            OnSay?.Invoke(text);
+            Log.Write($"whiteboard remote voice: ok engine={Settings.Current.VoiceASR} chars={text.Length} elapsed={started.ElapsedMilliseconds}ms");
         }
-        catch (Exception ex) { Log.Write("whiteboard remote voice: " + ex.Message); await c.Response.WriteAsJsonAsync(new { ok = false, reason = "format" }); }
+        catch (OperationCanceledException) { Log.Write("whiteboard remote voice: request cancelled"); }
+        catch (InvalidDataException ex)
+        {
+            Log.Write("whiteboard remote voice: " + ex.Message);
+            if (!c.RequestAborted.IsCancellationRequested)
+                await c.Response.WriteAsJsonAsync(new { ok = false, reason = ex.Message });
+        }
+        catch (Exception ex)
+        {
+            Log.Write("whiteboard remote voice: " + ex.Message);
+            if (!c.RequestAborted.IsCancellationRequested)
+                await c.Response.WriteAsJsonAsync(new { ok = false, reason = "The recording could not be transcribed. Check Local voice in Windows Settings." });
+        }
         finally { try { File.Delete(source); } catch { } try { File.Delete(wav); } catch { } }
+    }
+
+    private static async Task CopyWithLimit(Stream input, Stream output, int maxBytes, CancellationToken ct)
+    {
+        var buffer = new byte[64 * 1024];
+        var total = 0;
+        while (true)
+        {
+            var read = await input.ReadAsync(buffer.AsMemory(0, buffer.Length), ct);
+            if (read == 0) break;
+            total += read;
+            if (total > maxBytes) throw new InvalidDataException("The recording is too long. Keep voice messages under about two minutes.");
+            await output.WriteAsync(buffer.AsMemory(0, read), ct);
+        }
+        if (total == 0) throw new InvalidDataException("The phone sent an empty recording.");
     }
 
     private static void ConvertToWav(string source, string wav)
@@ -189,12 +239,16 @@ internal sealed class WhiteboardRemote : IAsyncDisposable
         WaveFileWriter.CreateWaveFile(wav, resampler);
     }
 
-    private static Task<string?> SystemTranscribe(string wav) => Task.Run(() =>
+    private static async Task<string?> SystemTranscribe(string wav, CancellationToken ct)
     {
-        using var rec = new System.Speech.Recognition.SpeechRecognitionEngine();
-        rec.LoadGrammar(new System.Speech.Recognition.DictationGrammar()); rec.SetInputToWaveFile(wav);
-        return rec.Recognize()?.Text;
-    });
+        var task = Task.Run(() =>
+        {
+            using var rec = new System.Speech.Recognition.SpeechRecognitionEngine();
+            rec.LoadGrammar(new System.Speech.Recognition.DictationGrammar()); rec.SetInputToWaveFile(wav);
+            return rec.Recognize()?.Text;
+        }, ct);
+        return await task.WaitAsync(TimeSpan.FromSeconds(45), ct);
+    }
 
     private async Task Upload(HttpContext c)
     {
@@ -244,9 +298,9 @@ internal sealed class WhiteboardRemote : IAsyncDisposable
 <script>(function(){var token=new URLSearchParams(location.search).get('t')||'',q=s=>document.querySelector(s),feed=q('#feed'),els={},muted=false,stream=null,rec=null,chunks=[],holding=false,sendClip=false,unlocked=false,heardTimer;
 function url(p){return p+(p.indexOf('?')>=0?'&':'?')+'t='+encodeURIComponent(token)}function stat(s){q('#status').textContent=s||''}function unlock(){unlocked=true;if(speechSynthesis)try{speechSynthesis.resume()}catch(_){}}function speak(t){if(!t||muted||!unlocked||!speechSynthesis)return;try{speechSynthesis.cancel();var u=new SpeechSynthesisUtterance(t);u.rate=.96;speechSynthesis.speak(u)}catch(_){}}
 function up(m){var e=els[m.id];if(!e){e=document.createElement('div');e.className='msg '+m.role;els[m.id]=e;feed.appendChild(e)}e.innerHTML=m.html||'';if(!m.html)e.appendChild(document.createTextNode(m.text||''));if(m.image){var im=document.createElement('img');im.src=m.image;e.appendChild(im)}feed.scrollTop=feed.scrollHeight}function heard(t){var h=q('#heard');h.innerHTML='<b>Heard: </b>';h.appendChild(document.createTextNode(t));h.classList.add('on');clearTimeout(heardTimer);heardTimer=setTimeout(()=>h.classList.remove('on'),12000)}
-var es=new EventSource(url('/events'));es.onmessage=e=>{var d;try{d=JSON.parse(e.data)}catch(_){return}if(d.type==='msg')up(d);else if(d.type==='status')stat(d.text);else if(d.type==='settings'){muted=!!d.muted;q('#mute').textContent=muted?'🔇':'🔊'}else if(d.type==='speech')speak(d.text)};
+var es=new EventSource(url('/events'));es.onmessage=e=>{var d;try{d=JSON.parse(e.data)}catch(_){return}if(d.type==='msg')up(d);else if(d.type==='status')stat(d.text);else if(d.type==='voice_progress')stat((d.text||'transcribing')+' · '+(d.seconds||0)+'s');else if(d.type==='settings'){muted=!!d.muted;q('#mute').textContent=muted?'🔇':'🔊'}else if(d.type==='speech')speak(d.text)};
 function post(p,o){return fetch(url(p),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(o||{})})}function send(){var i=q('#inp'),t=i.value.trim();if(t){i.value='';post('/say',{text:t})}}q('#send').onclick=()=>{unlock();send()};q('#inp').onkeydown=e=>{if(e.key==='Enter'){e.preventDefault();unlock();send()}};q('#look').onclick=()=>{unlock();post('/look',{})};q('#mute').onclick=()=>{unlock();muted=!muted;q('#mute').textContent=muted?'🔇':'🔊';if(muted)speechSynthesis.cancel();post('/mute',{value:muted})};
-async function start(){unlock();try{stream=stream||await navigator.mediaDevices.getUserMedia({audio:true});var mime=['audio/mp4','audio/webm;codecs=opus','audio/webm'].find(x=>MediaRecorder.isTypeSupported(x))||'';rec=mime?new MediaRecorder(stream,{mimeType:mime}):new MediaRecorder(stream);chunks=[];rec.ondataavailable=e=>{if(e.data.size)chunks.push(e.data)};rec.onstop=finish;rec.start();q('#ptt').classList.add('rec');q('#ptt').textContent='Release'}catch(e){stat(location.protocol!=='https:'?'voice needs https':'allow microphone in Safari')}}function finish(){q('#ptt').classList.remove('rec');q('#ptt').textContent='Hold';if(!sendClip)return;var b=new Blob(chunks,{type:rec.mimeType||'audio/mp4'});stat('transcribing…');fetch(url('/voice'),{method:'POST',headers:{'Content-Type':b.type},body:b}).then(r=>r.json()).then(d=>{if(d.ok&&d.text){heard(d.text);stat('sent')}else stat("couldn't hear that")}).catch(()=>stat('voice failed'))}
+async function start(){unlock();try{stream=stream||await navigator.mediaDevices.getUserMedia({audio:true});var mime=['audio/mp4','audio/webm;codecs=opus','audio/webm'].find(x=>MediaRecorder.isTypeSupported(x))||'';rec=mime?new MediaRecorder(stream,{mimeType:mime}):new MediaRecorder(stream);chunks=[];rec.ondataavailable=e=>{if(e.data.size)chunks.push(e.data)};rec.onstop=finish;rec.start();q('#ptt').classList.add('rec');q('#ptt').textContent='Release'}catch(e){stat(location.protocol!=='https:'?'voice needs https':'allow microphone in Safari')}}async function finish(){q('#ptt').classList.remove('rec');q('#ptt').textContent='Hold';if(!sendClip)return;sendClip=false;var b=new Blob(chunks,{type:rec.mimeType||'audio/mp4'}),ac=new AbortController(),timeout=setTimeout(()=>ac.abort(),960000);stat('uploading recording…');try{var r=await fetch(url('/voice'),{method:'POST',headers:{'Content-Type':b.type},body:b,signal:ac.signal}),d=await r.json();if(d.ok&&d.text){heard(d.text);stat('sending transcript…')}else stat(d.reason||"couldn't hear that")}catch(e){stat(e.name==='AbortError'?'transcription timed out':'voice failed — check the Windows log')}finally{clearTimeout(timeout)}}
 var p=q('#ptt');p.onpointerdown=e=>{e.preventDefault();try{p.setPointerCapture(e.pointerId)}catch(_){}holding=true;sendClip=false;start()};p.onpointerup=e=>{if(!holding)return;holding=false;sendClip=true;if(rec&&rec.state!=='inactive')rec.stop()};p.onpointercancel=()=>{holding=false;sendClip=false;if(rec&&rec.state!=='inactive')rec.stop()};
 q('#photo').onclick=()=>q('#file').click();q('#file').onchange=function(){var f=this.files&&this.files[0];this.value='';if(!f)return;stat('sending photo…');fetch(url('/upload'),{method:'POST',headers:{'Content-Type':f.type||'image/jpeg'},body:f}).then(()=>stat('sent')).catch(()=>stat('photo failed'))};fetch(url('/state')).then(r=>r.json()).then(s=>{q('#project').textContent=s.project||'Whiteboard';stat(s.status);muted=!!s.muted;q('#mute').textContent=muted?'🔇':'🔊'});})();</script></body></html>
 """;

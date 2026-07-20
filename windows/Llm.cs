@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
+using System.Linq;
 using System.Net;
 using System.Net.Http;
 using System.Net.Http.Headers;
@@ -571,15 +572,41 @@ public static class Llm
         foreach (var name in new[] { "codex", "codex.cmd", "codex.exe" })
         {
             var p = WhereOnPath(name);
-            if (p != null) { _codexCli = p; return p; }
+            if (p != null)
+            {
+                _codexCli = PreferNativeCodex(p);
+                return _codexCli;
+            }
         }
         var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
         var native = Path.Combine(home, ".local", "bin", "codex.exe");
         if (File.Exists(native)) { _codexCli = native; return native; }
         var appData = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
         var npmShim = Path.Combine(appData, "npm", "codex.cmd");
-        if (File.Exists(npmShim)) { _codexCli = npmShim; return npmShim; }
+        if (File.Exists(npmShim)) { _codexCli = PreferNativeCodex(npmShim); return _codexCli; }
         return null;
+    }
+
+    // npm exposes codex.cmd, but the package also carries a native codex.exe. Launching
+    // that executable directly avoids cmd.exe adding another quoting/stdin layer on Windows.
+    private static string PreferNativeCodex(string resolved)
+    {
+        if (!resolved.EndsWith(".cmd", StringComparison.OrdinalIgnoreCase) &&
+            !resolved.EndsWith(".bat", StringComparison.OrdinalIgnoreCase)) return resolved;
+        try
+        {
+            var npmRoot = Path.Combine(Path.GetDirectoryName(resolved)!, "node_modules", "@openai", "codex");
+            if (!Directory.Exists(npmRoot)) return resolved;
+            var native = Directory.EnumerateFiles(npmRoot, "codex.exe", SearchOption.AllDirectories)
+                .FirstOrDefault(p => p.Contains("vendor", StringComparison.OrdinalIgnoreCase));
+            if (native != null)
+            {
+                Log.Write("codex: using native executable instead of npm cmd shim");
+                return native;
+            }
+        }
+        catch (Exception ex) { Log.Write("codex: native executable probe failed — " + ex.Message); }
+        return resolved;
     }
 
     // Resolve a command name against PATH via Windows `where`; returns the first
