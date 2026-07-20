@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
+using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using System.Threading;
@@ -33,6 +34,8 @@ internal sealed class AgentEngine
     private bool _segStreamed;   // saw a delta this segment → ignore a later full message
     private long _lastEmit = -1;
     private bool _dirty;
+    private bool _sawAssistantText;
+    private string? _reportedError;
 
     private Action<string> _onText = _ => { };
     private Action<string> _onEvent = _ => { };
@@ -75,24 +78,23 @@ internal sealed class AgentEngine
         _onText = onText;
         _onEvent = onEvent;
         _seg.Clear(); _segStreamed = false; _lastEmit = -1; _dirty = false;
+        _sawAssistantText = false; _reportedError = null;
 
         var cli = ResolveCli() ?? throw new Exception(_kind == AgentEngineKind.Codex
             ? "Codex CLI not found — npm i -g @openai/codex, then run `codex login`"
             : "Claude Code CLI not found — install it and run `claude` once to log in");
 
-        // Resume is PER PROJECT: a project that has had any prior turn (HasSession) resumes
-        // its own conversation — claude --continue is cwd-scoped, so it resumes the last
-        // session in THIS project dir automatically; codex resumes by the captured session id.
-        // Codex sessions are global rather than cwd-scoped. Only resume when this project owns
-        // a captured id; HasSession may have been set by a prior Claude turn.
+        // Resume is per project AND per provider. Claude's --continue is cwd-scoped while
+        // Codex needs the exact captured id; neither may infer state from the other engine.
         bool resume = _kind == AgentEngineKind.Codex
             ? !string.IsNullOrEmpty(project.CodexSessionId)
-            : project.HasSession;
+            : project.ClaudeHasSession;
         var psi = new ProcessStartInfo
         {
             UseShellExecute = false,
             RedirectStandardOutput = true,
             RedirectStandardError = true,
+            RedirectStandardInput = true,
             CreateNoWindow = true,
             StandardOutputEncoding = Encoding.UTF8,
             StandardErrorEncoding = Encoding.UTF8,
@@ -104,8 +106,9 @@ internal sealed class AgentEngine
         };
         Llm.SetCliTarget(psi, cli);
         var permission = permissionOverride ?? Settings.Current.AgentPermission;
-        BuildArgs(psi, task, images, attachDirs, resume, permission);
-        Log.Write($"agent: project={project.Slug} resume={(resume ? (_kind == AgentEngineKind.Codex ? "resume-id" : "continue") : "fresh")} engine={_kind} perm={permission} tasklen={task.Length}");
+        BuildArgs(psi, images, attachDirs, resume, permission);
+        var taskHash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(task)))[..12].ToLowerInvariant();
+        Log.Write($"agent: project={project.Slug} resume={(resume ? (_kind == AgentEngineKind.Codex ? "resume-id" : "continue") : "fresh")} engine={_kind} perm={permission} prompt=stdin len={task.Length} sha={taskHash}");
 
         var proc = new Process { StartInfo = psi };
         try { proc.Start(); }
@@ -114,15 +117,16 @@ internal sealed class AgentEngine
             proc.Dispose();
             throw new Exception((_kind == AgentEngineKind.Codex ? "Codex" : "Claude") + " CLI failed to start — " + ex.Message);
         }
-        // Mark the project resumable from now on (even if this turn errors mid-way), so the
-        // next turn — this session or a future app launch — continues its conversation.
-        if (!project.HasSession) { project.HasSession = true; ProjectStore.Save(project); }
-
         // cancellation kills the whole process tree (the CLI spawns children)
         using var reg = ct.Register(() => { try { if (!proc.HasExited) proc.Kill(true); } catch { } });
         var stderrTask = proc.StandardError.ReadToEndAsync();
         try
         {
+            // Both CLIs support text prompts on stdin. This avoids Windows' ~32K process
+            // command-line limit and guarantees newlines/quotes arrive byte-for-byte.
+            await proc.StandardInput.WriteAsync(task.AsMemory(), ct);
+            await proc.StandardInput.FlushAsync(ct);
+            proc.StandardInput.Close();
             string? line;
             while ((line = await proc.StandardOutput.ReadLineAsync(ct)) != null)
             {
@@ -146,9 +150,36 @@ internal sealed class AgentEngine
             {
                 string tail = "";
                 try { tail = (await stderrTask ?? "").Trim(); } catch { }
+                if (_kind == AgentEngineKind.Claude && resume && MissingClaudeSession(tail))
+                {
+                    project.ClaudeHasSession = false;
+                    project.HasSession = !string.IsNullOrEmpty(project.CodexSessionId);
+                    ProjectStore.Save(project);
+                    Event("▸ previous Claude session unavailable — retrying fresh");
+                    await Run(project, task, images, attachDirs, onText, onEvent, ct, permissionOverride);
+                    return;
+                }
                 if (tail.Length > 300) tail = "…" + tail[^300..];
                 throw new Exception(tail.Length > 0 ? tail : $"exit {proc.ExitCode}");
             }
+            if (!string.IsNullOrWhiteSpace(_reportedError))
+            {
+                if (_kind == AgentEngineKind.Claude && resume && MissingClaudeSession(_reportedError))
+                {
+                    project.ClaudeHasSession = false;
+                    project.HasSession = !string.IsNullOrEmpty(project.CodexSessionId);
+                    ProjectStore.Save(project);
+                    Event("▸ previous Claude session unavailable — retrying fresh");
+                    await Run(project, task, images, attachDirs, onText, onEvent, ct, permissionOverride);
+                    return;
+                }
+                throw new Exception(_reportedError);
+            }
+            if (!_sawAssistantText)
+                throw new Exception("The agent completed without returning a response. Check Health and the Cleanup log for the CLI output.");
+            project.HasSession = true;
+            if (_kind == AgentEngineKind.Claude) project.ClaudeHasSession = true;
+            ProjectStore.Save(project);
             Log.Write($"agent turn done engine={_kind}");
         }
         finally
@@ -160,7 +191,7 @@ internal sealed class AgentEngine
 
     // ---------- argument construction (per engine, per permission tier) ----------
 
-    private void BuildArgs(ProcessStartInfo psi, string task, IReadOnlyList<string> images, IReadOnlyList<string> attachDirs, bool resume, string permission)
+    private void BuildArgs(ProcessStartInfo psi, IReadOnlyList<string> images, IReadOnlyList<string> attachDirs, bool resume, string permission)
     {
         var s = Settings.Current;
         void A(string a) => psi.ArgumentList.Add(a);
@@ -190,7 +221,7 @@ internal sealed class AgentEngine
             // block so it can Read any non-image attachments itself.
             if (images != null)
                 foreach (var img in images) { A("-i"); A(img); }
-            A(task);
+            A("-"); // prompt is delivered through stdin
         }
         else
         {
@@ -199,10 +230,10 @@ internal sealed class AgentEngine
             //   --strict-mcp-config --mcp-config {} --settings {disableAllHooks}
             A("-p");
             if (resume) A("--continue");
-            A(task);
             var model = s.AgentClaudeModel?.Trim();
             if (!string.IsNullOrEmpty(model)) { A("--model"); A(model); }
             A("--output-format"); A("stream-json");
+            A("--input-format"); A("text");
             A("--verbose");
             A("--include-partial-messages");
             foreach (var flag in ClaudePermissionFlags(permission)) A(flag);
@@ -259,6 +290,7 @@ internal sealed class AgentEngine
         _seg.Append(full);
         _dirty = false;
         _lastEmit = Environment.TickCount64;
+        _sawAssistantText = true;
         _onText(_seg.ToString());
     }
 
@@ -267,12 +299,12 @@ internal sealed class AgentEngine
         long now = Environment.TickCount64;
         if (_lastEmit >= 0 && now - _lastEmit < 80) return;   // throttle UI churn
         _lastEmit = now;
-        if (_dirty) { _dirty = false; _onText(_seg.ToString()); }
+        if (_dirty) { _dirty = false; _sawAssistantText = true; _onText(_seg.ToString()); }
     }
 
     private void FlushText()
     {
-        if (_dirty && _seg.Length > 0) { _dirty = false; _lastEmit = Environment.TickCount64; _onText(_seg.ToString()); }
+        if (_dirty && _seg.Length > 0) { _dirty = false; _lastEmit = Environment.TickCount64; _sawAssistantText = true; _onText(_seg.ToString()); }
     }
 
     // Emit a dim event line and close the current text segment.
@@ -317,7 +349,13 @@ internal sealed class AgentEngine
                 }
                 break;
             case "result":
-                // authoritative end — the text already streamed; nothing to add.
+                // Newer versions stream assistant deltas; older/headless variants may only
+                // return the final `result` string. Supporting both avoids an empty bubble on
+                // machines with a different Claude CLI release.
+                var result = Str(root, "result") ?? Str(root, "text") ?? "";
+                if (root.TryGetProperty("is_error", out var isError) && isError.ValueKind == JsonValueKind.True)
+                    _reportedError = string.IsNullOrWhiteSpace(result) ? "Claude reported an unknown error." : result;
+                else if (!_sawAssistantText) SetFull(result);
                 break;
         }
     }
@@ -461,5 +499,12 @@ internal sealed class AgentEngine
     {
         s = s.Replace("\r", " ").Replace("\n", " ").Trim();
         return s.Length > 60 ? s[..60] + "…" : s;
+    }
+
+    private static bool MissingClaudeSession(string stderr)
+    {
+        var s = stderr.ToLowerInvariant();
+        return s.Contains("no conversation") || s.Contains("no session") ||
+               s.Contains("session not found") || s.Contains("conversation not found");
     }
 }

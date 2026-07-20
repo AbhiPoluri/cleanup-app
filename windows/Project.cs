@@ -30,6 +30,10 @@ public sealed class Project
     // follow-ups (including across app restarts) can `codex exec resume <id>` this
     // project's own conversation. Null until captured.
     public string? CodexSessionId { get; set; }
+    // Claude's --continue state is cwd-scoped and must not be inferred from a Codex run.
+    // Keeping a provider-specific flag prevents one engine from trying to resume the other's
+    // session, and avoids --continue after a failed first launch created no session at all.
+    public bool ClaudeHasSession { get; set; }
     // True once this project has had a CLI turn this or a prior session. Drives per-project
     // resume: claude --continue / codex resume are passed only when this is set. Cleared by
     // the "⊕ new session" affordance to start a fresh conversation in the project.

@@ -5,6 +5,37 @@
         WindowStyle="None" AllowsTransparency="True" Background="Transparent"
         Topmost="True" ShowInTaskbar="False" ResizeMode="CanResize"
         WindowStartupLocation="CenterScreen">
+  <Window.Resources>
+    <Style x:Key="TitleAction" TargetType="Button">
+      <Setter Property="Background" Value="Transparent"/>
+      <Setter Property="BorderThickness" Value="1"/>
+      <Setter Property="Padding" Value="9,4"/>
+      <Setter Property="Cursor" Value="Hand"/>
+      <Setter Property="Template">
+        <Setter.Value>
+          <ControlTemplate TargetType="Button">
+            <Border x:Name="Chrome" Background="{TemplateBinding Background}"
+                    BorderBrush="{TemplateBinding BorderBrush}"
+                    BorderThickness="{TemplateBinding BorderThickness}"
+                    CornerRadius="5" Padding="{TemplateBinding Padding}">
+              <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+            </Border>
+            <ControlTemplate.Triggers>
+              <Trigger Property="IsMouseOver" Value="True">
+                <Setter TargetName="Chrome" Property="Opacity" Value="0.78"/>
+              </Trigger>
+              <Trigger Property="IsPressed" Value="True">
+                <Setter TargetName="Chrome" Property="Opacity" Value="0.55"/>
+              </Trigger>
+              <Trigger Property="IsEnabled" Value="False">
+                <Setter TargetName="Chrome" Property="Opacity" Value="0.4"/>
+              </Trigger>
+            </ControlTemplate.Triggers>
+          </ControlTemplate>
+        </Setter.Value>
+      </Setter>
+    </Style>
+  </Window.Resources>
   <Border x:Name="Root" CornerRadius="12" BorderThickness="1" MouseLeftButtonDown="Root_MouseDown">
     <DockPanel>
       <Grid DockPanel.Dock="Top" Margin="16,12,14,10">
@@ -15,14 +46,24 @@
           <ColumnDefinition Width="Auto"/>
         </Grid.ColumnDefinitions>
         <TextBlock x:Name="TitleLabel" Text="Whiteboard" FontSize="13" FontWeight="SemiBold" VerticalAlignment="Center"/>
-        <Border x:Name="ProjectChip" Grid.Column="1" CornerRadius="6" BorderThickness="1" Padding="8,2" Margin="10,0,0,0" Cursor="Hand" MouseLeftButtonUp="Project_Click">
+        <Button x:Name="ProjectChip" Grid.Column="1" Style="{StaticResource TitleAction}"
+                Padding="8,3" Margin="10,0,0,0" Click="Project_Click" ToolTip="Switch Whiteboard project">
           <TextBlock x:Name="ProjectLabel" FontSize="11.5" FontFamily="Consolas"/>
-        </Border>
+        </Button>
         <TextBlock x:Name="StatusLabel" Grid.Column="2" Margin="10,0" FontSize="11" FontFamily="Consolas" VerticalAlignment="Center" TextTrimming="CharacterEllipsis"/>
         <TextBlock x:Name="EngineLabel" Grid.Column="3" Margin="0,0,10,0" FontSize="11" FontFamily="Consolas" VerticalAlignment="Center"/>
-        <Border x:Name="RemoteBtn" Grid.Column="4" CornerRadius="5" BorderThickness="1" Padding="8,3" Margin="0,0,7,0" Cursor="Hand" MouseLeftButtonUp="Remote_Click"><TextBlock x:Name="RemoteLabel" Text="phone" FontSize="11"/></Border>
-        <Border x:Name="MuteBtn" Grid.Column="5" CornerRadius="5" BorderThickness="1" Padding="8,3" Margin="0,0,7,0" Cursor="Hand" MouseLeftButtonUp="Mute_Click"><TextBlock x:Name="MuteLabel" FontSize="11"/></Border>
-        <Border x:Name="CloseBtn" Grid.Column="6" CornerRadius="5" BorderThickness="1" Padding="7,3" Cursor="Hand" MouseLeftButtonUp="Close_Click"><TextBlock x:Name="CloseLabel" Text="✕" FontSize="11"/></Border>
+        <Button x:Name="RemoteBtn" Grid.Column="4" Style="{StaticResource TitleAction}"
+                Margin="0,0,7,0" Click="Remote_Click" ToolTip="Open the QR code for the iPhone remote">
+          <TextBlock x:Name="RemoteLabel" Text="Phone remote" FontSize="11"/>
+        </Button>
+        <Button x:Name="MuteBtn" Grid.Column="5" Style="{StaticResource TitleAction}"
+                Margin="0,0,7,0" Click="Mute_Click" ToolTip="Turn spoken replies on or off">
+          <TextBlock x:Name="MuteLabel" FontSize="11"/>
+        </Button>
+        <Button x:Name="CloseBtn" Grid.Column="6" Style="{StaticResource TitleAction}"
+                Padding="8,4" Click="Close_Click" ToolTip="Close Whiteboard">
+          <TextBlock x:Name="CloseLabel" Text="✕" FontSize="11"/>
+        </Button>
       </Grid>
 
       <Grid Margin="14,0,14,14">

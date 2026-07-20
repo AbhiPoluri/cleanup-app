@@ -37,9 +37,9 @@ public partial class AgentWindow : Window
     private bool _busy;
     private bool _closeRequested;
 
-    // live assistant bubble the streaming text writes into (null → next text opens a new
-    // one). A read-only TextBox so the agent's output is selectable/copyable.
-    private TextBox? _curBubbleText;
+    // Live assistant bubble the streaming text writes into (null → next text opens a new
+    // one). Markdig parses each accumulated segment into native themed WPF elements.
+    private MarkdownView? _curBubbleText;
     private bool _autoScroll = true;
 
     // ---- attachments (per-message; tray clears after send) ----
@@ -130,7 +130,9 @@ public partial class AgentWindow : Window
             InputBox.IsEnabled = false;
             SendBtn.Opacity = 0.4;
         }
-        else if (_project.HasSession)
+        else if (_engine.Kind == AgentEngineKind.Codex
+            ? !string.IsNullOrEmpty(_project.CodexSessionId)
+            : _project.ClaudeHasSession)
         {
             AddDimLine($"resuming {_project.Name} — ⊕ for a fresh session");
         }
@@ -226,7 +228,10 @@ public partial class AgentWindow : Window
         ProjectStore.SetCurrent(slug);
         ProjectChipText.Text = p.Name;
         AddDimLine($"— switched to {p.Name} —");
-        Log.Write($"agent: switch project={slug} resume={(p.HasSession ? "continue" : "fresh")}");
+        var resumes = _engine.Kind == AgentEngineKind.Codex
+            ? !string.IsNullOrEmpty(p.CodexSessionId)
+            : p.ClaudeHasSession;
+        Log.Write($"agent: switch project={slug} resume={(resumes ? "continue" : "fresh")}");
     }
 
     private void NewProjectFlow()
@@ -258,6 +263,7 @@ public partial class AgentWindow : Window
         e.Handled = true;
         _project.HasSession = false;
         _project.CodexSessionId = null;
+        _project.ClaudeHasSession = false;
         ProjectStore.Save(_project);
         AddDimLine($"started a fresh session in {_project.Name}");
         Log.Write($"agent: new session project={_project.Slug}");
@@ -334,37 +340,12 @@ public partial class AgentWindow : Window
         AutoScroll();
     }
 
-    // Assistant bubble: a read-only, borderless, transparent TextBox so the output is
-    // selectable/copyable, plus a dim hover-reveal copy chip in the bottom-right corner.
+    // Assistant bubble: native Markdown plus a dim hover-reveal copy chip.
     private void AddAssistantBubble()
     {
-        var box = new TextBox
-        {
-            Foreground = _t.Text,
-            FontSize = _fontSize,
-            TextWrapping = TextWrapping.Wrap,
-            Background = Brushes.Transparent,
-            BorderThickness = new Thickness(0),
-            Padding = new Thickness(0),
-            IsReadOnly = true,
-            IsReadOnlyCaretVisible = false,
-            AcceptsReturn = true,
-            TextAlignment = TextAlignment.Left,
-            CaretBrush = Brushes.Transparent,
-            SelectionBrush = _t.LineStrong,
-            HorizontalScrollBarVisibility = ScrollBarVisibility.Hidden,
-            VerticalScrollBarVisibility = ScrollBarVisibility.Disabled,
-        };
-        // let the wheel scroll the transcript rather than being swallowed by the box
-        box.PreviewMouseWheel += (_, e) =>
-        {
-            if (e.Handled) return;
-            e.Handled = true;
-            Transcript.RaiseEvent(new MouseWheelEventArgs(e.MouseDevice, e.Timestamp, e.Delta)
-            { RoutedEvent = UIElement.MouseWheelEvent });
-        };
+        var box = new MarkdownView(_t, _fontSize);
 
-        var copy = BuildCopyChip(() => box.Text);
+        var copy = BuildCopyChip(() => box.Markdown);
         var grid = new Grid();
         grid.Children.Add(box);
         grid.Children.Add(copy);
@@ -413,7 +394,7 @@ public partial class AgentWindow : Window
     {
         HideThinking();
         if (_curBubbleText == null) AddAssistantBubble();
-        _curBubbleText!.Text = text;
+        _curBubbleText!.SetMarkdown(text);
         AutoScroll();
     }
 

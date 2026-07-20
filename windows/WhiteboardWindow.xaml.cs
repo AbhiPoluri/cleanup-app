@@ -26,7 +26,7 @@ public partial class WhiteboardWindow : Window
         public required string Role { get; init; }
         public required string Text { get; set; }
         public string? ImagePath { get; init; }
-        public TextBlock? View { get; set; }
+        public MarkdownView? View { get; set; }
     }
 
     private readonly Theme _t = Theme.Detect();
@@ -52,7 +52,7 @@ public partial class WhiteboardWindow : Window
         ApplyTheme();
         ProjectLabel.Text = _project.Name + "  ▾";
         EngineLabel.Text = _engine.Label.Replace(Settings.Current.AgentPermission, "safe");
-        MuteLabel.Text = Settings.Current.WhiteboardMuted ? "muted" : "sound";
+        MuteLabel.Text = Settings.Current.WhiteboardMuted ? "Sound off" : "Sound on";
         for (var i = 0; i < 4; i++) CameraBox.Items.Add("Camera " + (i + 1));
         CameraBox.SelectedIndex = Math.Clamp(Settings.Current.WhiteboardCamera, 0, 3);
         PositionCorners();
@@ -65,7 +65,7 @@ public partial class WhiteboardWindow : Window
         _remote.OnLook = () => Dispatcher.BeginInvoke(() => Look());
         _remote.OnMute = v => Dispatcher.BeginInvoke(() => SetMuted(v));
         _remote.OnPhoto = p => Dispatcher.BeginInvoke(() => SendPhoto(p));
-        _remote.UrlChanged += u => Dispatcher.BeginInvoke(() => RemoteLabel.Text = u == null ? "phone" : "phone ready");
+        _remote.UrlChanged += u => Dispatcher.BeginInvoke(() => RemoteLabel.Text = u == null ? "Phone unavailable" : "Phone remote");
 
         Loaded += OnLoaded;
         Closing += OnClosing;
@@ -112,7 +112,7 @@ public partial class WhiteboardWindow : Window
 
     private Border Bubble(BoardMessage message)
     {
-        var text = new TextBlock { Text = message.Text, Foreground = _t.Text, TextWrapping = TextWrapping.Wrap, FontSize = 13 };
+        var text = new MarkdownView(_t, 13); text.SetMarkdown(message.Text);
         message.View = text;
         FrameworkElement content = text;
         if (message.ImagePath != null)
@@ -221,7 +221,7 @@ public partial class WhiteboardWindow : Window
             _liveAssistant = new BoardMessage { Role = "assistant", Text = text };
             AddMessage(_liveAssistant);
         }
-        else { _liveAssistant.Text = text; if (_liveAssistant.View != null) _liveAssistant.View.Text = text; Publish(); }
+        else { _liveAssistant.Text = text; _liveAssistant.View?.SetMarkdown(text); Publish(); }
         Transcript.ScrollToEnd();
     }
 
@@ -239,10 +239,10 @@ public partial class WhiteboardWindow : Window
     private void SetMuted(bool muted)
     {
         Settings.Current.WhiteboardMuted = muted; Settings.Current.Save();
-        MuteLabel.Text = muted ? "muted" : "sound";
+        MuteLabel.Text = muted ? "Sound off" : "Sound on";
         if (muted) _speaker.Stop(); Publish();
     }
-    private void Mute_Click(object sender, MouseButtonEventArgs e) { e.Handled = true; SetMuted(!Settings.Current.WhiteboardMuted); }
+    private void Mute_Click(object sender, RoutedEventArgs e) { e.Handled = true; SetMuted(!Settings.Current.WhiteboardMuted); }
 
     private void Camera_Changed(object sender, SelectionChangedEventArgs e)
     {
@@ -288,7 +288,7 @@ public partial class WhiteboardWindow : Window
         e.Handled = true;
     }
 
-    private void Project_Click(object sender, MouseButtonEventArgs e)
+    private void Project_Click(object sender, RoutedEventArgs e)
     {
         e.Handled = true;
         var menu = new ContextMenu { PlacementTarget = ProjectChip, Placement = PlacementMode.Bottom, Background = _t.Surface2, Foreground = _t.Text };
@@ -301,7 +301,7 @@ public partial class WhiteboardWindow : Window
         menu.IsOpen = true;
     }
 
-    private void Remote_Click(object sender, MouseButtonEventArgs e)
+    private void Remote_Click(object sender, RoutedEventArgs e)
     {
         e.Handled = true;
         if (_remote.Url == null) { SetStatus("phone remote unavailable — check Wi-Fi"); return; }
@@ -310,10 +310,17 @@ public partial class WhiteboardWindow : Window
 
     private void Root_MouseDown(object sender, MouseButtonEventArgs e)
     {
-        if (e.ChangedButton != MouseButton.Left || e.OriginalSource is TextBox or Button or ComboBox or Ellipse) return;
+        if (e.ChangedButton != MouseButton.Left || IsInteractive(e.OriginalSource as DependencyObject)) return;
         try { DragMove(); } catch { }
     }
-    private void Close_Click(object sender, MouseButtonEventArgs e) { e.Handled = true; Close(); }
+    private static bool IsInteractive(DependencyObject? source)
+    {
+        for (var node = source; node != null; node = VisualTreeHelper.GetParent(node))
+            if (node is ButtonBase or TextBoxBase or ComboBox or Ellipse or ScrollBar)
+                return true;
+        return false;
+    }
+    private void Close_Click(object sender, RoutedEventArgs e) { e.Handled = true; Close(); }
 
     private void OnClosing(object? sender, System.ComponentModel.CancelEventArgs e)
     {
