@@ -621,22 +621,47 @@
               </Grid>
               <TextBlock x:Name="VoiceTestStatus" Style="{StaticResource Caption}" Margin="0,0,0,8"
                          Text="Used by Whiteboard spoken replies. Kokoro runs locally; System voice needs no setup."/>
-              <Grid Margin="0,2,0,0">
-                <Grid.ColumnDefinitions>
-                  <ColumnDefinition Width="120"/>
-                  <ColumnDefinition Width="*"/>
-                  <ColumnDefinition Width="Auto"/>
-                </Grid.ColumnDefinitions>
-                <TextBlock Text="Local engines" Style="{StaticResource RowLabel}"/>
-                <TextBlock Grid.Column="1" Style="{StaticResource Caption}" Margin="0,0,8,0"
-                           VerticalAlignment="Center"
-                           Text="Parakeet ASR + Kokoro TTS in a managed Python environment (~2 GB, downloaded once)."/>
-                <Button x:Name="VoiceInstallBtn" Grid.Column="2" Content="Install local voice engines"
-                        Style="{StaticResource Btn}" VerticalAlignment="Top" Click="VoiceInstall_Click"/>
-              </Grid>
-              <Border Style="{StaticResource StatusBox}">
-                <TextBlock x:Name="VoiceStatusLabel" FontSize="11.5" TextWrapping="Wrap"
-                           Foreground="{DynamicResource Muted}"/>
+              <TextBlock Text="Local engines" Style="{StaticResource RowLabel}" Margin="0,4,0,5"/>
+              <Border Style="{StaticResource StatusBox}" Padding="12">
+                <Grid>
+                  <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="Auto"/>
+                  </Grid.RowDefinitions>
+                  <Grid>
+                    <Grid.ColumnDefinitions>
+                      <ColumnDefinition Width="Auto"/>
+                      <ColumnDefinition Width="*"/>
+                      <ColumnDefinition Width="Auto"/>
+                    </Grid.ColumnDefinitions>
+                    <Ellipse x:Name="VoiceStateDot" Width="8" Height="8" Margin="0,1,9,0"
+                             VerticalAlignment="Center" Fill="{DynamicResource Muted}"/>
+                    <StackPanel Grid.Column="1">
+                      <TextBlock x:Name="VoiceStateTitle" FontSize="12" FontWeight="SemiBold"
+                                 Foreground="{DynamicResource Text}"/>
+                      <TextBlock x:Name="VoiceStatusLabel" FontSize="11" Margin="0,3,14,0"
+                                 TextWrapping="Wrap" Foreground="{DynamicResource Muted}"/>
+                    </StackPanel>
+                    <TextBlock x:Name="VoiceInstallStepLabel" Grid.Column="2" FontSize="10.5"
+                               Foreground="{DynamicResource Faint}" VerticalAlignment="Top"
+                               Visibility="Collapsed"/>
+                  </Grid>
+                  <ProgressBar x:Name="VoiceInstallProgress" Grid.Row="1" Height="5" Margin="17,12,0,0"
+                               Minimum="0" Maximum="100" Value="0" Visibility="Collapsed"
+                               Foreground="{DynamicResource Accent}" Background="{DynamicResource Surface2}"
+                               BorderThickness="0"/>
+                  <TextBlock x:Name="VoiceInstallHint" Grid.Row="2" Style="{StaticResource Caption}"
+                             Margin="17,9,0,0"
+                             Text="Parakeet ASR + Kokoro TTS install into a managed environment. Models download once when first used."/>
+                  <StackPanel Grid.Row="3" Margin="17,12,0,0" Orientation="Horizontal">
+                    <Button x:Name="VoiceInstallBtn" Content="Install local voice engines"
+                            Style="{StaticResource Btn}" Click="VoiceInstall_Click"/>
+                    <Button x:Name="VoiceCancelBtn" Content="Cancel" Margin="8,0,0,0"
+                            Style="{StaticResource Btn}" Click="VoiceCancel_Click" Visibility="Collapsed"/>
+                  </StackPanel>
+                </Grid>
               </Border>
             </StackPanel>
           </Border>

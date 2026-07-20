@@ -8,6 +8,17 @@ using System.Threading.Tasks;
 
 namespace Cleanup;
 
+internal readonly record struct VoiceInstallProgress(
+    int Step, int TotalSteps, double Percent, string Title, string Detail);
+
+internal enum VoiceInstallResult
+{
+    Success,
+    Failed,
+    Cancelled,
+    MissingPython,
+}
+
 // Manager for the OPTIONAL local voice engines (Parakeet ASR + Kokoro TTS). Everything
 // runs inside a managed Python venv at Documents\Cleanup\voice\venv and is driven by a
 // single persistent helper.py (stdin/stdout JSON-lines, IDENTICAL protocol to the Mac
@@ -284,53 +295,62 @@ internal static class VoiceEngine
     public static bool SystemPythonAvailable() => FindSystemPython() != null;
 
     // Async install: create the venv, upgrade pip, pip install the two packages, then write
-    // the helper. `progress` reports coarse states for the settings row. Returns true on
-    // success; false (with a logged reason) otherwise. Idempotent — re-running repairs a
-    // half-built install.
-    public static async Task<bool> Install(Action<string> progress, CancellationToken ct = default)
+    // the helper. The installer reports honest stage-based progress: pip does not expose a
+    // reliable aggregate byte percentage, so the long package step stays at its stage
+    // boundary instead of showing a fake download percentage. Idempotent — re-running
+    // repairs a half-built install.
+    public static async Task<VoiceInstallResult> Install(
+        Action<VoiceInstallProgress> progress, CancellationToken ct = default)
     {
+        const int steps = 5;
+        void Report(int step, double percent, string title, string detail) =>
+            progress(new VoiceInstallProgress(step, steps, percent, title, detail));
+
         try
         {
+            Report(1, 5, "Checking requirements", "Looking for Python 3.10 or newer.");
             var py = FindSystemPython();
             if (py == null)
             {
-                progress("Install Python 3.10+ first — python.org/downloads");
-                return false;
+                return VoiceInstallResult.MissingPython;
             }
             Directory.CreateDirectory(VoiceDir);
 
+            Report(2, 18, "Preparing the local environment",
+                File.Exists(VenvPython) ? "Reusing the existing managed environment." : "Creating an isolated Python environment.");
             if (!File.Exists(VenvPython))
             {
-                progress("Creating Python environment…");
                 if (!await RunToCompletion(py.Value.Exe, Concat(py.Value.Pre, new[] { "-m", "venv", VenvDir }), VoiceDir, ct))
-                { progress("Couldn't create the environment — see the log"); return false; }
+                    return VoiceInstallResult.Failed;
             }
             if (!File.Exists(VenvPython))
-            { progress("Environment build failed — see the log"); return false; }
+                return VoiceInstallResult.Failed;
 
-            progress("Updating pip…");
-            await RunToCompletion(VenvPython, new[] { "-m", "pip", "install", "--upgrade", "pip" }, VoiceDir, ct);
+            Report(3, 34, "Preparing the package installer", "Updating pip inside Cleanup's environment.");
+            if (!await RunToCompletion(VenvPython,
+                    new[] { "-m", "pip", "install", "--upgrade", "pip" }, VoiceDir, ct))
+                return VoiceInstallResult.Failed;
 
-            progress("Downloading voice packages (a few minutes)…");
+            Report(4, 52, "Downloading voice packages",
+                "Installing Parakeet and Kokoro. This is usually the longest step and can take several minutes.");
             // onnx-asr[cpu,hub]: cpu → onnxruntime, hub → huggingface_hub (needed for the
             // Parakeet model download). kokoro-onnx: the TTS stack.
             if (!await RunToCompletion(VenvPython,
                     new[] { "-m", "pip", "install", "onnx-asr[cpu,hub]", "kokoro-onnx" }, VoiceDir, ct))
-            { progress("Package install failed — see the log"); return false; }
+                return VoiceInstallResult.Failed;
 
-            progress("Writing helper…");
+            Report(5, 90, "Finishing setup", "Writing the local helper and verifying the installation.");
             WriteHelper();
 
-            progress("Installed");
+            Report(5, 100, "Local voice is installed", "Parakeet and Kokoro are ready to use.");
             Log.Write("voice: install complete");
-            return true;
+            return VoiceInstallResult.Success;
         }
-        catch (OperationCanceledException) { progress("Cancelled"); return false; }
+        catch (OperationCanceledException) { return VoiceInstallResult.Cancelled; }
         catch (Exception ex)
         {
             Log.Write("voice: install failed — " + ex.Message);
-            progress("Install failed — see the log");
-            return false;
+            return VoiceInstallResult.Failed;
         }
     }
 

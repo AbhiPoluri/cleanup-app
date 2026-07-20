@@ -38,6 +38,7 @@ public partial class SettingsWindow : Window
         SourceInitialized += (_, _) => TryDarkTitleBar();
         Closing += (_, _) =>
         {
+            _voiceInstallCts?.Cancel();
             Settings.Current.SettingsWidth = ActualWidth;
             Settings.Current.SettingsHeight = ActualHeight;
             Settings.Current.Save();
@@ -284,6 +285,27 @@ public partial class SettingsWindow : Window
 
     private System.Threading.CancellationTokenSource? _voiceInstallCts;
 
+    private void SetVoiceInstallUi(string title, string detail, System.Windows.Media.Brush dot,
+        string action, bool installing = false, bool canCancel = false,
+        double? progress = null, string? step = null)
+    {
+        VoiceStateTitle.Text = title;
+        VoiceStatusLabel.Text = detail;
+        VoiceStateDot.Fill = dot;
+        VoiceInstallBtn.Content = action;
+        VoiceInstallBtn.IsEnabled = !installing;
+        VoiceCancelBtn.Visibility = canCancel ? Visibility.Visible : Visibility.Collapsed;
+        VoiceCancelBtn.IsEnabled = canCancel;
+        VoiceInstallProgress.Visibility = progress.HasValue ? Visibility.Visible : Visibility.Collapsed;
+        VoiceInstallProgress.Value = progress ?? 0;
+        VoiceInstallStepLabel.Text = step ?? "";
+        VoiceInstallStepLabel.Visibility = step == null ? Visibility.Collapsed : Visibility.Visible;
+        VoiceInstallHint.Text = canCancel
+            ? "Keep Settings open. You can cancel safely; running the installer again resumes setup."
+            : "Parakeet ASR + Kokoro TTS install into a managed environment. Models download once when first used.";
+        VoiceTestBtn.IsEnabled = !installing && !_voiceTesting;
+    }
+
     // Reflect install/helper state into the status box + the button label. Pings the helper
     // when installed (spawns it once — reused by the mic afterwards).
     private async System.Threading.Tasks.Task RefreshVoiceStatus()
@@ -294,28 +316,37 @@ public partial class SettingsWindow : Window
         {
             if (!VoiceEngine.IsInstalled)
             {
-                VoiceInstallBtn.Content = "Install local voice engines";
-                VoiceInstallBtn.IsEnabled = true;
-                VoiceStatusLabel.Text = VoiceEngine.SystemPythonAvailable()
-                    ? "Not installed. Downloads Parakeet (ASR) + Kokoro (TTS) into a managed Python environment."
-                    : "Python 3.10+ not found. Install it from python.org, then click Install.";
+                if (VoiceEngine.SystemPythonAvailable())
+                    SetVoiceInstallUi("Ready to install",
+                        "Python is available. Setup usually takes a few minutes.", _t.Muted,
+                        "Install local voice engines");
+                else
+                    SetVoiceInstallUi("Python is required",
+                        "Install Python 3.10 or newer from python.org, then return here.", _t.DiffDelText,
+                        "Check again");
                 return;
             }
-            VoiceStatusLabel.Text = "Installed — checking the helper…";
+            SetVoiceInstallUi("Checking local voice", "Confirming that the helper can start.",
+                _t.Muted, "Checking…", installing: true, progress: 96, step: "Verifying");
             var ping = await VoiceEngine.Ping();
-            VoiceInstallBtn.Content = "Reinstall";
-            VoiceInstallBtn.IsEnabled = true;
             if (ping == null)
             {
-                VoiceStatusLabel.Text = "Installed, but the helper isn't responding — click Reinstall.";
+                SetVoiceInstallUi("Repair needed",
+                    "The files are installed, but the helper did not respond.", _t.DiffDelText,
+                    "Repair installation");
                 return;
             }
             var model = VoiceEngine.ParakeetModelPresent()
                 ? "Parakeet model ready" : "Parakeet model downloads on first mic use";
-            VoiceStatusLabel.Text =
-                $"Ready — helper responds (ASR {(ping.Value.Asr ? "✓" : "✗")}, TTS {(ping.Value.Tts ? "✓" : "✗")}). {model}.";
+            SetVoiceInstallUi("Local voice is ready",
+                $"Parakeet {(ping.Value.Asr ? "available" : "unavailable")} · Kokoro {(ping.Value.Tts ? "available" : "unavailable")} · {model}.",
+                _t.DiffAddText, "Reinstall");
         }
-        catch { VoiceStatusLabel.Text = "Could not check the local voice engines."; }
+        catch
+        {
+            SetVoiceInstallUi("Status check failed", "Cleanup could not inspect the local voice installation.",
+                _t.DiffDelText, "Try again");
+        }
     }
 
     // "Test voice" — audition the selected speech-output engine right from Settings.
@@ -361,22 +392,78 @@ public partial class SettingsWindow : Window
         if (_voiceInstallCts != null) return;   // already installing
         var cts = new System.Threading.CancellationTokenSource();
         _voiceInstallCts = cts;
-        VoiceInstallBtn.IsEnabled = false;
-        // progress arrives on the UI thread (Install is awaited here without ConfigureAwait),
-        // but marshal defensively so a background continuation can't touch the label off-thread.
-        void Report(string msg) => Dispatcher.Invoke(() => { if (VoiceStatusLabel != null) VoiceStatusLabel.Text = msg; });
+        var lastProgress = 0d;
+        var currentStep = "Starting";
+        var installClock = System.Diagnostics.Stopwatch.StartNew();
+        var activityTimer = new System.Windows.Threading.DispatcherTimer
+        {
+            Interval = TimeSpan.FromSeconds(1),
+        };
+        activityTimer.Tick += (_, _) =>
+        {
+            if (_voiceInstallCts == null) return;
+            var elapsed = installClock.Elapsed;
+            VoiceInstallStepLabel.Text = $"{currentStep} · {(int)elapsed.TotalMinutes}:{elapsed.Seconds:00} elapsed";
+        };
+        activityTimer.Start();
+        void Report(VoiceInstallProgress p) => Dispatcher.Invoke(() =>
+        {
+            lastProgress = p.Percent;
+            currentStep = $"Step {p.Step} of {p.TotalSteps}";
+            SetVoiceInstallUi(p.Title, p.Detail, _t.Accent, "Installing…", installing: true,
+                canCancel: true, progress: p.Percent, step: currentStep);
+        });
         try
         {
-            await VoiceEngine.Install(Report, cts.Token);
+            var result = await VoiceEngine.Install(Report, cts.Token);
+            if (ReferenceEquals(_voiceInstallCts, cts)) _voiceInstallCts = null;
+            switch (result)
+            {
+                case VoiceInstallResult.Success:
+                    SetVoiceInstallUi("Local voice is ready",
+                        "Installation completed. Parakeet and Kokoro are available locally.",
+                        _t.DiffAddText, "Reinstall", progress: 100, step: "Complete");
+                    break;
+                case VoiceInstallResult.Cancelled:
+                    SetVoiceInstallUi("Installation cancelled",
+                        "No active download. Run setup again to continue from the existing files.",
+                        _t.Muted, "Resume installation", progress: lastProgress);
+                    break;
+                case VoiceInstallResult.MissingPython:
+                    SetVoiceInstallUi("Python is required",
+                        "Install Python 3.10 or newer from python.org, then return here.",
+                        _t.DiffDelText, "Check again");
+                    break;
+                default:
+                    SetVoiceInstallUi("Installation failed",
+                        "Setup stopped before completion. Try again, or open the log from the tray for details.",
+                        _t.DiffDelText, "Try again", progress: lastProgress);
+                    break;
+            }
         }
-        catch { Report("Install failed — see the log (tray → Open Log)."); }
-        finally
+        catch
         {
             if (ReferenceEquals(_voiceInstallCts, cts)) _voiceInstallCts = null;
-            VoiceInstallBtn.IsEnabled = true;
-            await RefreshVoiceStatus();
+            SetVoiceInstallUi("Installation failed",
+                "Setup stopped before completion. Try again, or open the log from the tray for details.",
+                _t.DiffDelText, "Try again", progress: lastProgress);
+        }
+        finally
+        {
+            activityTimer.Stop();
+            installClock.Stop();
+            if (ReferenceEquals(_voiceInstallCts, cts)) _voiceInstallCts = null;
             _ = LoadHealth(true);   // refresh the Local voice health row too
         }
+    }
+
+    private void VoiceCancel_Click(object sender, RoutedEventArgs e)
+    {
+        if (_voiceInstallCts == null) return;
+        VoiceCancelBtn.IsEnabled = false;
+        VoiceStateTitle.Text = "Cancelling installation";
+        VoiceStatusLabel.Text = "Stopping the current setup process safely…";
+        _voiceInstallCts.Cancel();
     }
 
     private UpdateInfo? _pendingUpdate;
