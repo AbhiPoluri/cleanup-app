@@ -302,7 +302,7 @@ public partial class SettingsWindow : Window
         VoiceInstallStepLabel.Visibility = step == null ? Visibility.Collapsed : Visibility.Visible;
         VoiceInstallHint.Text = canCancel
             ? "Keep Settings open. You can cancel safely; running the installer again resumes setup."
-            : "Parakeet ASR + Kokoro TTS install into a managed environment. Models download once when first used.";
+            : "Parakeet uses memory-optimized INT8 weights and releases model RAM after 2 minutes idle. Models download once when first used.";
         VoiceTestBtn.IsEnabled = !installing && !_voiceTesting;
     }
 
@@ -337,7 +337,7 @@ public partial class SettingsWindow : Window
                 return;
             }
             var model = VoiceEngine.ParakeetModelPresent()
-                ? "Parakeet model ready" : "Parakeet model downloads on first mic use";
+                ? "INT8 Parakeet model ready" : "INT8 Parakeet model downloads on first mic use";
             SetVoiceInstallUi("Local voice is ready",
                 $"Parakeet {(ping.Value.Asr ? "available" : "unavailable")} · Kokoro {(ping.Value.Tts ? "available" : "unavailable")} · {model}.",
                 _t.DiffAddText, "Reinstall");

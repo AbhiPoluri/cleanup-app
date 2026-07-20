@@ -188,7 +188,7 @@ public static class Health
             return new HealthRow { Level = HealthLevel.Red, Title = "Local voice",
                 Detail = "installed but the helper isn't responding — reinstall in Settings" };
         string models = VoiceEngine.ParakeetModelPresent()
-            ? "Parakeet model ready" : "Parakeet model downloads on first use";
+            ? "INT8 Parakeet ready · unloads after 2 min idle" : "INT8 Parakeet downloads on first use";
         return new HealthRow { Level = HealthLevel.Green, Title = "Local voice",
             Detail = $"venv ready · helper ok (asr {(ping.Value.Asr ? "✓" : "✗")}, " +
                      $"tts {(ping.Value.Tts ? "✓" : "✗")}) · {models}" };

@@ -1,6 +1,7 @@
 using System;
 using System.Diagnostics;
 using System.IO;
+using System.Linq;
 using System.Text;
 using System.Text.Json;
 using System.Threading;
@@ -42,6 +43,9 @@ internal static class VoiceEngine
     private static StreamWriter? _stdin;
     private static StreamReader? _stdout;
     private static readonly SemaphoreSlim _gate = new(1, 1);
+    private static readonly object _idleTimerGate = new();
+    private static Timer? _idleTimer;
+    private static readonly TimeSpan IdleShutdownDelay = TimeSpan.FromMinutes(2);
 
     // ---- availability ----
 
@@ -70,7 +74,8 @@ internal static class VoiceEngine
                     : hfHome;
                 hubCache = Path.Combine(root, "hub");
             }
-            return Directory.Exists(Path.Combine(hubCache, "models--istupakov--parakeet-tdt-0.6b-v3-onnx"));
+            var modelRoot = Path.Combine(hubCache, "models--istupakov--parakeet-tdt-0.6b-v3-onnx");
+            return Directory.Exists(modelRoot) && Directory.EnumerateFiles(modelRoot, "*int8*", SearchOption.AllDirectories).Any();
         }
         catch { return false; }
     }
@@ -133,7 +138,11 @@ internal static class VoiceEngine
             KillProc();
             return null;
         }
-        finally { _gate.Release(); }
+        finally
+        {
+            ScheduleIdleShutdown();
+            _gate.Release();
+        }
     }
 
     // ping → (asr, tts) capability flags, or null if the helper can't be reached. Fast
@@ -237,8 +246,41 @@ internal static class VoiceEngine
         _stdout = null;
     }
 
+    private static void ScheduleIdleShutdown()
+    {
+        lock (_idleTimerGate)
+        {
+            _idleTimer ??= new Timer(IdleShutdown, null, Timeout.InfiniteTimeSpan, Timeout.InfiniteTimeSpan);
+            _idleTimer.Change(IdleShutdownDelay, Timeout.InfiniteTimeSpan);
+        }
+    }
+
+    private static void IdleShutdown(object? _)
+    {
+        // Never interrupt an active ASR/TTS request. If the gate is busy, that request's
+        // finally block will schedule a fresh full idle window when it completes.
+        if (!_gate.Wait(0)) return;
+        try
+        {
+            if (_proc is { HasExited: false })
+            {
+                KillProc();
+                Log.Write("voice: helper stopped after 2 minutes idle (model RAM released)");
+            }
+        }
+        finally { _gate.Release(); }
+    }
+
     // Called from AppController.Dispose — mirrors the agent-window kill discipline.
-    public static void Shutdown() => KillProc();
+    public static void Shutdown()
+    {
+        lock (_idleTimerGate)
+        {
+            try { _idleTimer?.Dispose(); } catch { }
+            _idleTimer = null;
+        }
+        KillProc();
+    }
 
     // ---- install (venv + pip) ----
 
@@ -437,7 +479,7 @@ internal static class VoiceEngine
 #   {""op"":""ping""}                                          -> {""ok"":true,""asr"":bool,""tts"":bool}
 #   (anything wrong)                                       -> {""ok"":false,""error"":""...""}
 #
-# ASR: onnx-asr Parakeet TDT 0.6B v3 (HF istupakov/parakeet-tdt-0.6b-v3-onnx).
+# ASR: memory-optimized INT8 onnx-asr Parakeet TDT 0.6B v3.
 # TTS: kokoro-onnx 0.5.x. All model files lazy-download on first use into ./models.
 import sys
 import os
@@ -477,10 +519,11 @@ def get_asr():
     global _asr
     if _asr is None:
         import onnx_asr
-        # preset name maps to HF istupakov/parakeet-tdt-0.6b-v3-onnx (downloaded once).
+        # INT8 materially reduces the 0.6B model's resident memory while preserving the
+        # same Parakeet architecture. The quantized weights download once from the preset.
         # Pin the CPU provider: deterministic across macOS/Windows and matches the CPU-only
         # onnxruntime we install (avoids a CoreML external-data init failure on macOS).
-        _asr = onnx_asr.load_model(""nemo-parakeet-tdt-0.6b-v3"", providers=[""CPUExecutionProvider""])
+        _asr = onnx_asr.load_model(""nemo-parakeet-tdt-0.6b-v3"", quantization=""int8"", providers=[""CPUExecutionProvider""])
     return _asr
 
 

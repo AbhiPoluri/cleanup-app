@@ -170,7 +170,7 @@ internal sealed class WhiteboardRemote : IAsyncDisposable
         {
             var elapsed = started.Elapsed;
             Push(new { type = "voice_progress", seconds = (int)elapsed.TotalSeconds,
-                text = elapsed.TotalSeconds < 8 ? "transcribing" : "transcribing · first use may be downloading the local model" });
+                text = elapsed.TotalSeconds < 8 ? "transcribing" : "transcribing · first use may be downloading the INT8 model" });
         }, null, TimeSpan.Zero, TimeSpan.FromSeconds(2));
         try
         {
